@@ -729,6 +729,7 @@ class RedeclarableTemplateDecl : public TemplateDecl,
   }
 
   void anchor() override;
+
 protected:
   template <typename EntryType> struct SpecEntryTraits {
     using DeclType = EntryType;
@@ -769,12 +770,21 @@ protected:
     return SpecIterator<EntryType>(isEnd ? Specs.end() : Specs.begin());
   }
 
-  void loadLazySpecializationsImpl() const;
+  void loadLazySpecializationsImpl(bool OnlyPartial = false) const;
+
+  bool loadLazySpecializationsImpl(llvm::ArrayRef<TemplateArgument> Args,
+                                   TemplateParameterList *TPL = nullptr) const;
 
   template <class EntryType, typename ...ProfileArguments>
   typename SpecEntryTraits<EntryType>::DeclType*
   findSpecializationImpl(llvm::FoldingSetVector<EntryType> &Specs,
                          void *&InsertPos, ProfileArguments &&...ProfileArgs);
+
+  template <class EntryType, typename... ProfileArguments>
+  typename SpecEntryTraits<EntryType>::DeclType *
+  findSpecializationLocally(llvm::FoldingSetVector<EntryType> &Specs,
+                            void *&InsertPos,
+                            ProfileArguments &&...ProfileArgs);
 
   template <class Derived, class EntryType>
   void addSpecializationImpl(llvm::FoldingSetVector<EntryType> &Specs,
@@ -786,13 +796,6 @@ protected:
     /// The template from which this was most
     /// directly instantiated (or null).
     RedeclarableTemplateDecl *InstantiatedFromMember = nullptr;
-
-    /// If non-null, points to an array of specializations (including
-    /// partial specializations) known only by their external declaration IDs.
-    ///
-    /// The first value in the array is the number of specializations/partial
-    /// specializations that follow.
-    GlobalDeclID *LazySpecializations = nullptr;
 
     /// The set of "injected" template arguments used within this
     /// template.
@@ -2291,7 +2294,7 @@ public:
   friend class TemplateDeclInstantiator;
 
   /// Load any lazily-loaded specializations from the external source.
-  void LoadLazySpecializations() const;
+  void LoadLazySpecializations(bool OnlyPartial = false) const;
 
   /// Get the underlying class declarations of the template.
   CXXRecordDecl *getTemplatedDecl() const {
@@ -3044,7 +3047,7 @@ public:
   friend class ASTDeclWriter;
 
   /// Load any lazily-loaded specializations from the external source.
-  void LoadLazySpecializations() const;
+  void LoadLazySpecializations(bool OnlyPartial = false) const;
 
   /// Get the underlying variable declarations of the template.
   VarDecl *getTemplatedDecl() const {
