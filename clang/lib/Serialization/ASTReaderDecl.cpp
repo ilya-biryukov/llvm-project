@@ -185,12 +185,9 @@ class ASTDeclReader : public DeclVisitor<ASTDeclReader, void> {
 
   GlobalDeclID readDeclID() { return Record.readDeclID(); }
 
-  std::string readString() { return Record.readString(); }
-
-  void readDeclIDList(SmallVectorImpl<GlobalDeclID> &IDs) {
-    for (unsigned I = 0, Size = Record.readInt(); I != Size; ++I)
-      IDs.push_back(readDeclID());
-  }
+    std::string readString() {
+      return Record.readString();
+    }
 
   Decl *readDecl() { return Record.readDecl(); }
 
@@ -284,34 +281,10 @@ public:
       : Reader(Reader), MergeImpl(Reader), Record(Record), Loc(Loc),
         ThisDeclID(thisDeclID), ThisDeclLoc(ThisDeclLoc) {}
 
-  template <typename T>
-  static void AddLazySpecializations(T *D, SmallVectorImpl<GlobalDeclID> &IDs) {
-    if (IDs.empty())
-      return;
-
-    // FIXME: We should avoid this pattern of getting the ASTContext.
-    ASTContext &C = D->getASTContext();
-
-    auto *&LazySpecializations = D->getCommonPtr()->LazySpecializations;
-
-    if (auto &Old = LazySpecializations) {
-      IDs.insert(IDs.end(), Old + 1, Old + 1 + Old[0].getRawValue());
-      llvm::sort(IDs);
-      IDs.erase(std::unique(IDs.begin(), IDs.end()), IDs.end());
-    }
-
-    auto *Result = new (C) GlobalDeclID[1 + IDs.size()];
-    *Result = GlobalDeclID(IDs.size());
-
-    std::copy(IDs.begin(), IDs.end(), Result + 1);
-
-    LazySpecializations = Result;
-  }
-
-  template <typename DeclT>
-  static Decl *getMostRecentDeclImpl(Redeclarable<DeclT> *D);
-  static Decl *getMostRecentDeclImpl(...);
-  static Decl *getMostRecentDecl(Decl *D);
+    template <typename DeclT>
+    static Decl *getMostRecentDeclImpl(Redeclarable<DeclT> *D);
+    static Decl *getMostRecentDeclImpl(...);
+    static Decl *getMostRecentDecl(Decl *D);
 
   template <typename DeclT>
   static void attachPreviousDeclImpl(ASTReader &Reader, Redeclarable<DeclT> *D,
@@ -335,7 +308,7 @@ public:
   void ReadFunctionDefinition(FunctionDecl *FD);
   void Visit(Decl *D);
 
-  void UpdateDecl(Decl *D, SmallVectorImpl<GlobalDeclID> &);
+    void UpdateDecl(Decl *D);
 
   static void setNextObjCCategory(ObjCCategoryDecl *Cat,
                                   ObjCCategoryDecl *Next) {
@@ -441,8 +414,11 @@ public:
 
   std::pair<uint64_t, uint64_t> VisitDeclContext(DeclContext *DC);
 
-  template <typename T>
-  RedeclarableResult VisitRedeclarable(Redeclarable<T> *D);
+    void ReadSpecializations(ModuleFile &M, Decl *D,
+                             llvm::BitstreamCursor &Cursor);
+
+    template<typename T>
+    RedeclarableResult VisitRedeclarable(Redeclarable<T> *D);
 
   template <typename T>
   void mergeRedeclarable(Redeclarable<T> *D, RedeclarableResult &Redecl);
@@ -2409,6 +2385,14 @@ void ASTDeclReader::VisitImplicitConceptSpecializationDecl(
 void ASTDeclReader::VisitRequiresExprBodyDecl(RequiresExprBodyDecl *D) {
 }
 
+void ASTDeclReader::ReadSpecializations(ModuleFile &M, Decl *D,
+                                        llvm::BitstreamCursor &DeclsCursor) {
+  uint64_t Offset = ReadLocalOffset();
+  bool Failed = Reader.ReadSpecializations(M, DeclsCursor, Offset, D);
+  (void)Failed;
+  assert(!Failed);
+}
+
 RedeclarableResult
 ASTDeclReader::VisitRedeclarableTemplateDecl(RedeclarableTemplateDecl *D) {
   RedeclarableResult Redecl = VisitRedeclarable(D);
@@ -2447,9 +2431,7 @@ void ASTDeclReader::VisitClassTemplateDecl(ClassTemplateDecl *D) {
   if (ThisDeclID == Redecl.getFirstID()) {
     // This ClassTemplateDecl owns a CommonPtr; read it to keep track of all of
     // the specializations.
-    SmallVector<GlobalDeclID, 32> SpecIDs;
-    readDeclIDList(SpecIDs);
-    ASTDeclReader::AddLazySpecializations(D, SpecIDs);
+    ReadSpecializations(*Loc.F, D, Loc.F->DeclsCursor);
   }
 
   if (D->getTemplatedDecl()->TemplateOrInstantiation) {
@@ -2475,9 +2457,7 @@ void ASTDeclReader::VisitVarTemplateDecl(VarTemplateDecl *D) {
   if (ThisDeclID == Redecl.getFirstID()) {
     // This VarTemplateDecl owns a CommonPtr; read it to keep track of all of
     // the specializations.
-    SmallVector<GlobalDeclID, 32> SpecIDs;
-    readDeclIDList(SpecIDs);
-    ASTDeclReader::AddLazySpecializations(D, SpecIDs);
+    ReadSpecializations(*Loc.F, D, Loc.F->DeclsCursor);
   }
 }
 
@@ -2576,9 +2556,7 @@ void ASTDeclReader::VisitFunctionTemplateDecl(FunctionTemplateDecl *D) {
 
   if (ThisDeclID == Redecl.getFirstID()) {
     // This FunctionTemplateDecl owns a CommonPtr; read it.
-    SmallVector<GlobalDeclID, 32> SpecIDs;
-    readDeclIDList(SpecIDs);
-    ASTDeclReader::AddLazySpecializations(D, SpecIDs);
+    ReadSpecializations(*Loc.F, D, Loc.F->DeclsCursor);
   }
 }
 
@@ -3868,6 +3846,7 @@ Decl *ASTReader::ReadDeclRecord(GlobalDeclID ID) {
   switch ((DeclCode)MaybeDeclCode.get()) {
   case DECL_CONTEXT_LEXICAL:
   case DECL_CONTEXT_VISIBLE:
+  case DECL_SPECIALIZATIONS:
     llvm_unreachable("Record cannot be de-serialized with readDeclRecord");
   case DECL_TYPEDEF:
     D = TypedefDecl::CreateDeserialized(Context, ID);
@@ -4278,8 +4257,6 @@ void ASTReader::loadDeclUpdateRecords(PendingUpdateRecord &Record) {
   ProcessingUpdatesRAIIObj ProcessingUpdates(*this);
   DeclUpdateOffsetsMap::iterator UpdI = DeclUpdateOffsets.find(ID);
 
-  SmallVector<GlobalDeclID, 8> PendingLazySpecializationIDs;
-
   if (UpdI != DeclUpdateOffsets.end()) {
     auto UpdateOffsets = std::move(UpdI->second);
     DeclUpdateOffsets.erase(UpdI);
@@ -4316,7 +4293,7 @@ void ASTReader::loadDeclUpdateRecords(PendingUpdateRecord &Record) {
 
       ASTDeclReader Reader(*this, Record, RecordLocation(F, Offset), ID,
                            SourceLocation());
-      Reader.UpdateDecl(D, PendingLazySpecializationIDs);
+      Reader.UpdateDecl(D);
 
       // We might have made this declaration interesting. If so, remember that
       // we need to hand it off to the consumer.
@@ -4326,17 +4303,6 @@ void ASTReader::loadDeclUpdateRecords(PendingUpdateRecord &Record) {
       }
     }
   }
-  // Add the lazy specializations to the template.
-  assert((PendingLazySpecializationIDs.empty() || isa<ClassTemplateDecl>(D) ||
-          isa<FunctionTemplateDecl, VarTemplateDecl>(D)) &&
-         "Must not have pending specializations");
-  if (auto *CTD = dyn_cast<ClassTemplateDecl>(D))
-    ASTDeclReader::AddLazySpecializations(CTD, PendingLazySpecializationIDs);
-  else if (auto *FTD = dyn_cast<FunctionTemplateDecl>(D))
-    ASTDeclReader::AddLazySpecializations(FTD, PendingLazySpecializationIDs);
-  else if (auto *VTD = dyn_cast<VarTemplateDecl>(D))
-    ASTDeclReader::AddLazySpecializations(VTD, PendingLazySpecializationIDs);
-  PendingLazySpecializationIDs.clear();
 
   // Load the pending visible updates for this decl context, if it has any.
   auto I = PendingVisibleUpdates.find(ID);
@@ -4350,6 +4316,16 @@ void ASTReader::loadDeclUpdateRecords(PendingUpdateRecord &Record) {
           Update.Mod, Update.Data,
           reader::ASTDeclContextNameLookupTrait(*this, *Update.Mod));
     DC->setHasExternalVisibleStorage(true);
+  }
+
+  // Load the pending specializations update for this decl, if it has any.
+  if (auto I = PendingSpecializationsUpdates.find(ID);
+      I != PendingSpecializationsUpdates.end()) {
+    auto SpecializationUpdates = std::move(I->second);
+    PendingSpecializationsUpdates.erase(I);
+
+    for (const auto &Update : SpecializationUpdates)
+      AddSpecializations(D, Update.Data, *Update.Mod);
   }
 }
 
@@ -4543,9 +4519,7 @@ static void forAllLaterRedecls(DeclT *D, Fn F) {
   }
 }
 
-void ASTDeclReader::UpdateDecl(
-    Decl *D,
-    llvm::SmallVectorImpl<GlobalDeclID> &PendingLazySpecializationIDs) {
+void ASTDeclReader::UpdateDecl(Decl *D) {
   while (Record.getIdx() < Record.size()) {
     switch ((DeclUpdateKind)Record.readInt()) {
     case UPD_CXX_ADDED_IMPLICIT_MEMBER: {
@@ -4555,11 +4529,6 @@ void ASTDeclReader::UpdateDecl(
       Reader.PendingAddedClassMembers.push_back({RD, MD});
       break;
     }
-
-    case UPD_CXX_ADDED_TEMPLATE_SPECIALIZATION:
-      // It will be added to the template's lazy specialization set.
-      PendingLazySpecializationIDs.push_back(readDeclID());
-      break;
 
     case UPD_CXX_ADDED_ANONYMOUS_NAMESPACE: {
       auto *Anon = readDeclAs<NamespaceDecl>();
