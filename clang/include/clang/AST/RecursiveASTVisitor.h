@@ -2090,6 +2090,9 @@ DEF_TRAVERSE_DECL(NonTypeTemplateParmDecl, {
 DEF_TRAVERSE_DECL(ParmVarDecl, {
   TRY_TO(TraverseVarHelper(D));
 
+  if (!shouldVisitImplicitCode() && D->hasInheritedDefaultArg())
+    return true;
+
   if (D->hasDefaultArg() && D->hasUninstantiatedDefaultArg() &&
       !D->hasUnparsedDefaultArg())
     TRY_TO(TraverseStmt(D->getUninstantiatedDefaultArg()));
