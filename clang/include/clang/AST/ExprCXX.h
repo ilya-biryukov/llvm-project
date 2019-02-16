@@ -1213,7 +1213,7 @@ public:
 ///     const S &s_ref = S(); // Requires a CXXBindTemporaryExpr.
 ///   }
 /// \endcode
-class CXXBindTemporaryExpr : public Expr {
+class CXXBindTemporaryExpr final : public Expr {
   CXXTemporary *Temp = nullptr;
   Stmt *SubExpr = nullptr;
 
