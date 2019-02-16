@@ -33,6 +33,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -48,8 +49,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -124,6 +125,7 @@ class Preprocessor {
   friend class VAOptDefinitionContext;
   friend class VariadicMacroScopeGuard;
 
+  llvm::unique_function<void(const clang::Token &)> OnToken;
   std::shared_ptr<PreprocessorOptions> PPOpts;
   DiagnosticsEngine        *Diags;
   LangOptions       &LangOpts;
@@ -910,6 +912,14 @@ public:
     Callbacks = std::move(C);
   }
   /// \}
+
+  /// Register a function that would be called on each token seen by the
+  /// preprocessor. This is a very low-level hook, the produced token stream is
+  /// tied to the internals of the preprocessor so interpreting result of the
+  /// callback is hard.
+  void setTokenWatcher(llvm::unique_function<void(const clang::Token &)> F) {
+    OnToken = std::move(F);
+  }
 
   bool isMacroDefined(StringRef Id) {
     return isMacroDefined(&Identifiers.get(Id));

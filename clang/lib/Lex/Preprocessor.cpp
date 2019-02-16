@@ -864,6 +864,7 @@ bool Preprocessor::HandleIdentifier(Token &Identifier) {
 void Preprocessor::Lex(Token &Result) {
   // We loop here until a lex function returns a token; this avoids recursion.
   bool ReturnedToken;
+  bool Cached = false;
   do {
     switch (CurLexerKind) {
     case CLK_Lexer:
@@ -875,6 +876,7 @@ void Preprocessor::Lex(Token &Result) {
     case CLK_CachingLexer:
       CachingLex(Result);
       ReturnedToken = true;
+      Cached = true;
       break;
     case CLK_LexAfterModuleImport:
       LexAfterModuleImport(Result);
@@ -893,6 +895,8 @@ void Preprocessor::Lex(Token &Result) {
   }
 
   LastTokenWasAt = Result.is(tok::at);
+  if (OnToken && ReturnedToken && !Cached)
+    OnToken(Result);
 }
 
 /// Lex a header-name token (including one formed from header-name-tokens if
