@@ -116,6 +116,8 @@ public:
   toOffsetRange(const Token *Begin, const Token *End,
                 const SourceManager &SM) const;
 
+  /// Find a macro expansion by its first resulting token.
+  const MacroExpansion *findMacroCall(const Token *Begin) const;
   /// All top-level macro expansions from the corresponding file. Includes
   /// functional macro invocation and expansion of macro identifiers. E.g would
   /// contain 3 entries for the following code:

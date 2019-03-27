@@ -385,3 +385,13 @@ TokenBuffer::toOffsetRange(const Token *Begin, const Token *End,
                            : std::prev(End)->endLocation());
   return std::make_pair(BeginOffset, EndOffset);
 }
+
+const MacroExpansion *TokenBuffer::findMacroCall(const Token *Begin) const {
+  unsigned Index = Begin - Tokens.data();
+  auto It = std::lower_bound(Expansions.begin(), Expansions.end(), Index,
+                             [](const MacroExpansion &L, unsigned R) {
+                               return L.BeginExpansionToken < R;
+                             });
+  return It != Expansions.end() && It->BeginExpansionToken == Index ? &*It
+                                                                    : nullptr;
+}
