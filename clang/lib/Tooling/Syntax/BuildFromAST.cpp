@@ -149,7 +149,7 @@ public:
 // Statements.
 /// Leaf statements consume the trailing semicolon.
 #define LEAF_STMT(ASTStmt, SynStmt)                                            \
-  bool WalkUpFrom##ASTNode(clang::ASTStmt *N) {                                \
+  bool WalkUpFrom##ASTStmt(clang::ASTStmt *N) {                                \
     return WalkUpFromTrivial<syntax::SynStmt, clang::ASTStmt>(N);              \
   }
 /// Composite statements do not have trailing semicolons.
