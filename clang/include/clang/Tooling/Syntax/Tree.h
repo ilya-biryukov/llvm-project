@@ -171,8 +171,11 @@ private:
   /// Prepend \p Child to the list of children and and sets the parent pointer.
   /// A very low-level operation that does not check any invariants, only used
   /// by TreeBuilder and FactoryImpl.
-  /// EXPECTS: Role != NodeRoleDetached.
+  /// EXPECTS: Role != Detached.
   void prependChildLowLevel(Node *Child, NodeRole Role);
+  /// Like the previous overload, but does not set role for \p Child.
+  /// EXPECTS: Child->Role != Detached
+  void prependChildLowLevel(Node *Child);
   friend class TreeBuilder;
   friend class FactoryImpl;
 

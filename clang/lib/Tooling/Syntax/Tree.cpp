@@ -66,14 +66,20 @@ bool syntax::Node::isDetached() const { return role() == NodeRole::Detached; }
 bool syntax::Tree::classof(const Node *N) { return N->kind() > NodeKind::Leaf; }
 
 void syntax::Tree::prependChildLowLevel(Node *Child, NodeRole Role) {
-  assert(Child->Parent == nullptr);
-  assert(Child->NextSibling == nullptr);
   assert(Child->role() == NodeRole::Detached);
   assert(Role != NodeRole::Detached);
 
+  Child->Role = static_cast<unsigned>(Role);
+  prependChildLowLevel(Child);
+}
+
+void syntax::Tree::prependChildLowLevel(Node *Child) {
+  assert(Child->Parent == nullptr);
+  assert(Child->NextSibling == nullptr);
+  assert(Child->role() != NodeRole::Detached);
+
   Child->Parent = this;
   Child->NextSibling = this->FirstChild;
-  Child->Role = static_cast<unsigned>(Role);
   this->FirstChild = Child;
 }
 
