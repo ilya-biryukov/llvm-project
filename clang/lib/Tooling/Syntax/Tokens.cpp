@@ -67,7 +67,8 @@ FileRange syntax::Token::range(const SourceManager &SM,
   auto F = First.range(SM);
   auto L = Last.range(SM);
   assert(F.file() == L.file() && "tokens from different files");
-  assert((F == L || F.endOffset() <= L.beginOffset()) && "wrong order of tokens");
+  assert((F == L || F.endOffset() <= L.beginOffset()) &&
+         "wrong order of tokens");
   return FileRange(F.file(), F.beginOffset(), L.endOffset());
 }
 
@@ -174,6 +175,72 @@ TokenBuffer::spelledForExpandedToken(const syntax::Token *Expanded) const {
   return {
       &File.SpelledTokens[It->EndSpelled + (ExpandedIndex - It->EndExpanded)],
       /*Mapping*/ nullptr};
+}
+
+const TokenBuffer::Mapping *
+TokenBuffer::mappingStartingBeforeSpelled(const MarkedFile &F,
+                                          const syntax::Token *Spelled) {
+  assert(F.SpelledTokens.data() <= Spelled);
+  unsigned SpelledI = Spelled - F.SpelledTokens.data();
+  assert(SpelledI < F.SpelledTokens.size());
+
+  auto It = llvm::partition_point(F.Mappings, [SpelledI](const Mapping &M) {
+    return M.BeginSpelled <= SpelledI;
+  });
+  if (It == F.Mappings.begin())
+    return nullptr;
+  --It;
+  return &*It;
+}
+
+llvm::SmallVector<llvm::ArrayRef<syntax::Token>, 1>
+TokenBuffer::expandedForSpelled(llvm::ArrayRef<syntax::Token> Spelled) const {
+  assert(!Spelled.empty());
+  assert(Spelled.front().location().isFileID());
+
+  auto FID = sourceManager().getFileID(Spelled.front().location());
+  auto It = Files.find(FID);
+  assert(It != Files.end());
+
+  auto &File = It->second;
+  assert(File.SpelledTokens.data() <= Spelled.data());
+  assert(Spelled.size() <= File.SpelledTokens.size());
+
+  auto *FrontMapping = mappingStartingBeforeSpelled(File, &Spelled.front());
+  unsigned SpelledFrontI = &Spelled.front() - File.SpelledTokens.data();
+  unsigned ExpandedBegin;
+  if (!FrontMapping) {
+    ExpandedBegin = File.BeginExpanded + SpelledFrontI;
+  } else if (SpelledFrontI < FrontMapping->EndSpelled) {
+    if (SpelledFrontI != FrontMapping->BeginSpelled)
+      return {}; // FIXME: support macro arguments.
+    ExpandedBegin = FrontMapping->BeginExpanded;
+  } else {
+    ExpandedBegin =
+        FrontMapping->EndExpanded + (SpelledFrontI - FrontMapping->EndSpelled);
+  }
+
+  auto *BackMapping = mappingStartingBeforeSpelled(File, &Spelled.back());
+  unsigned SpelledBackI = &Spelled.back() - File.SpelledTokens.data();
+  unsigned ExpandedEnd;
+  if (!BackMapping) {
+    ExpandedEnd = File.BeginExpanded + SpelledBackI + 1;
+  } else if (SpelledBackI < BackMapping->EndSpelled) {
+    if (SpelledBackI + 1 != BackMapping->EndSpelled)
+      return {}; // FIXME: support macro arguments.
+    ExpandedEnd = BackMapping->EndExpanded;
+  } else {
+    ExpandedEnd =
+        BackMapping->EndExpanded + (SpelledBackI - BackMapping->EndSpelled) + 1;
+  }
+
+  assert(ExpandedBegin < ExpandedTokens.size());
+  assert(ExpandedEnd < ExpandedTokens.size());
+  // Avoid returning empty ranges.
+  if (ExpandedBegin == ExpandedEnd)
+    return {};
+  return {llvm::makeArrayRef(ExpandedTokens.data() + ExpandedBegin,
+                             ExpandedTokens.data() + ExpandedEnd)};
 }
 
 llvm::ArrayRef<syntax::Token> TokenBuffer::spelledTokens(FileID FID) const {

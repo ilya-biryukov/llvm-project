@@ -57,6 +57,7 @@ using ::testing::AllOf;
 using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::IsEmpty;
 using ::testing::Matcher;
 using ::testing::Not;
 using ::testing::StartsWith;
@@ -178,10 +179,14 @@ public:
   template <class T, class U, class Eq>
   llvm::ArrayRef<T> findSubrange(llvm::ArrayRef<U> Subrange,
                                  llvm::ArrayRef<T> Range, Eq F) {
-    for (auto Begin = Range.begin(); Begin < Range.end(); ++Begin) {
+    assert(Subrange.size() >= 1);
+    if (Range.size() < Subrange.size())
+      return llvm::makeArrayRef(Range.end(), Range.end());
+    for (auto Begin = Range.begin(), Last = Range.end() - Subrange.size();
+         Begin <= Last; ++Begin) {
       auto It = Begin;
-      for (auto ItSub = Subrange.begin();
-           ItSub != Subrange.end() && It != Range.end(); ++ItSub, ++It) {
+      for (auto ItSub = Subrange.begin(); ItSub != Subrange.end();
+           ++ItSub, ++It) {
         if (!F(*ItSub, *It))
           goto continue_outer;
       }
@@ -662,6 +667,101 @@ TEST_F(TokenBufferTest, SpelledByExpanded) {
   )cpp");
   EXPECT_THAT(Buffer.spelledForExpanded(findExpanded("not_mapped")),
               ValueIs(SameRange(findSpelled("not_mapped"))));
+}
+
+TEST_F(TokenBufferTest, ExpandedBySpelled) {
+  recordTokens(R"cpp(
+    a1 a2 a3 b1 b2
+  )cpp");
+  // Sanity check: expanded and spelled tokens are stored separately.
+  EXPECT_THAT(findExpanded("a1 a2"), Not(SameRange(findSpelled("a1 a2"))));
+  // Searching for subranges of expanded tokens should give the corresponding
+  // spelled ones.
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("a1 a2 a3 b1 b2")),
+              ElementsAre(SameRange(findExpanded("a1 a2 a3 b1 b2"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("a1 a2 a3")),
+              ElementsAre(SameRange(findExpanded("a1 a2 a3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("b1 b2")),
+              ElementsAre(SameRange(findExpanded("b1 b2"))));
+
+  // Test search on simple macro expansions.
+  recordTokens(R"cpp(
+    #define A a1 a2 a3
+    #define B b1 b2
+
+    A split B
+  )cpp");
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("A split B")),
+              ElementsAre(SameRange(findExpanded("a1 a2 a3 split b1 b2"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("A split").drop_back()),
+              ElementsAre(SameRange(findExpanded("a1 a2 a3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("split B").drop_front()),
+              ElementsAre(SameRange(findExpanded("b1 b2"))));
+
+  // Recursive macro invocations.
+  recordTokens(R"cpp(
+    #define ID(x) x
+    #define B b1 b2
+
+    ID(ID(ID(a1) a2 a3)) split ID(B)
+  )cpp");
+
+  EXPECT_THAT(
+      Buffer.expandedForSpelled(findSpelled("ID ( ID ( ID ( a1 ) a2 a3 ) )")),
+      ElementsAre(SameRange(findExpanded("a1 a2 a3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( B )")),
+              ElementsAre(SameRange(findExpanded("b1 b2"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(
+                  findSpelled("ID ( ID ( ID ( a1 ) a2 a3 ) ) split ID ( B )")),
+              ElementsAre(SameRange(findExpanded("a1 a2 a3 split b1 b2"))));
+  // FIXME: these should succeed, but we do not support macro arguments yet.
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("a1")), IsEmpty());
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( a1 ) a2")),
+              IsEmpty());
+
+  // Empty macro expansions.
+  recordTokens(R"cpp(
+    #define EMPTY
+    #define ID(X) X
+
+    EMPTY EMPTY ID(1 2 3) EMPTY EMPTY split1
+    EMPTY EMPTY ID(4 5 6) split2
+    ID(7 8 9) EMPTY EMPTY
+  )cpp");
+  // Covered by empty expansions on one of both of the sides.
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( 1 2 3 )")),
+              ElementsAre(SameRange(findExpanded("1 2 3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( 4 5 6 )")),
+              ElementsAre(SameRange(findExpanded("4 5 6"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( 7 8 9 )")),
+              ElementsAre(SameRange(findExpanded("7 8 9"))));
+  // Including the empty macro expansions on the side.
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("EMPTY ID ( 1 2 3 )")),
+              ElementsAre(SameRange(findExpanded("1 2 3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("ID ( 1 2 3 ) EMPTY")),
+              ElementsAre(SameRange(findExpanded("1 2 3"))));
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("EMPTY ID ( 1 2 3 ) EMPTY")),
+              ElementsAre(SameRange(findExpanded("1 2 3"))));
+
+  // Empty mappings coming from various directives.
+  recordTokens(R"cpp(
+    #define ID(X) X
+    ID(1)
+    #pragma lalala
+    not_mapped
+  )cpp");
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("# define ID ( X ) X")),
+              IsEmpty());
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("# pragma lalala")),
+              IsEmpty());
+
+  // Empty macro expansion.
+  recordTokens(R"cpp(
+    #define EMPTY
+    EMPTY int a = 100;
+  )cpp");
+  EXPECT_THAT(Buffer.expandedForSpelled(findSpelled("EMPTY int").drop_back()),
+              IsEmpty());
 }
 
 TEST_F(TokenBufferTest, ExpandedTokensForRange) {
