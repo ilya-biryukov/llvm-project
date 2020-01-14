@@ -365,11 +365,12 @@ syntax::spelledIdentifierTouching(SourceLocation Loc,
   return nullptr;
 }
 
-
 llvm::ArrayRef<syntax::Token>
 syntax::selectedTokens(FileRange Selected, const syntax::TokenBuffer &Tokens) {
   auto &SM = Tokens.sourceManager();
   llvm::ArrayRef<syntax::Token> All = Tokens.spelledTokens(Selected.file());
+  if (Selected.length() == 0)
+    return tokensTouching(Selected.beginLocation(SM), All, SM);
   auto *L = tokenContaining(Selected.beginLocation(SM), All, SM);
   if (!L)
     return {};
