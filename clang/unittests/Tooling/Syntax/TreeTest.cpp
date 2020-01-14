@@ -1414,6 +1414,32 @@ int X::* a;
   | `-a
   `-;
        )txt"},
+      // Do not crash on broken if statements without conditions.
+      {R"cpp(
+void func() {
+  if () {}
+}
+    )cpp",
+       R"txt(
+  *: TranslationUnit
+`-SimpleDeclaration
+  |-void
+  |-SimpleDeclarator
+  | |-func
+  | `-ParametersAndQualifiers
+  |   |-(
+  |   `-)
+  `-CompoundStatement
+    |-{
+    |-IfStatement
+    | |-if
+    | |-(
+    | |-)
+    | `-CompoundStatement
+    |   |-{
+    |   `-}
+    `-}
+       )txt"},
   };
 
   for (const auto &T : Cases) {

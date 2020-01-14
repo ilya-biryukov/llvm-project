@@ -26,6 +26,7 @@
 #include "clang/Tooling/Syntax/Tree.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -255,10 +256,10 @@ public:
   /// locations.
   /// \p First is the start position of the first token and \p Last is the start
   /// position of the last token.
-  llvm::ArrayRef<syntax::Token> getRange(SourceLocation First,
-                                         SourceLocation Last) const {
-    assert(First.isValid());
-    assert(Last.isValid());
+  llvm::Optional<llvm::ArrayRef<syntax::Token>>
+  getRange(SourceLocation First, SourceLocation Last) const {
+    if (!First.isValid() || !Last.isValid())
+      return llvm::None;
     assert(First == Last ||
            Arena.sourceManager().isBeforeInTranslationUnit(First, Last));
     return llvm::makeArrayRef(findToken(First), std::next(findToken(Last)));
@@ -268,33 +269,38 @@ public:
   getTemplateRange(const ClassTemplateSpecializationDecl *D) const {
     auto R = D->getSourceRange();
     auto Tokens = getRange(R.getBegin(), R.getEnd());
-    return maybeAppendSemicolon(Tokens, D);
+    assert(Tokens.hasValue());
+    return maybeAppendSemicolon(*Tokens, D);
   }
 
   llvm::ArrayRef<syntax::Token> getDeclRange(const Decl *D) const {
-    llvm::ArrayRef<clang::syntax::Token> Tokens;
+    llvm::Optional<llvm::ArrayRef<clang::syntax::Token>> Tokens;
     // We want to drop the template parameters for specializations.
     if (auto *S = llvm::dyn_cast<TagDecl>(D))
       Tokens = getRange(S->TypeDecl::getBeginLoc(), S->getEndLoc());
     else
       Tokens = getRange(D->getBeginLoc(), D->getEndLoc());
-    return maybeAppendSemicolon(Tokens, D);
+    assert(Tokens.hasValue());
+    return maybeAppendSemicolon(*Tokens, D);
   }
-  llvm::ArrayRef<syntax::Token> getExprRange(const Expr *E) const {
+  llvm::Optional<llvm::ArrayRef<syntax::Token>>
+  getExprRange(const Expr *E) const {
     return getRange(E->getBeginLoc(), E->getEndLoc());
   }
   /// Find the adjusted range for the statement, consuming the trailing
   /// semicolon when needed.
-  llvm::ArrayRef<syntax::Token> getStmtRange(const Stmt *S) const {
+  llvm::Optional<llvm::ArrayRef<syntax::Token>>
+  getStmtRange(const Stmt *S) const {
     auto Tokens = getRange(S->getBeginLoc(), S->getEndLoc());
+    if (!Tokens)
+      return llvm::None;
     if (isa<CompoundStmt>(S))
       return Tokens;
-
     // Some statements miss a trailing semicolon, e.g. 'return', 'continue' and
     // all statements that end with those. Consume this semicolon here.
-    if (Tokens.back().kind() == tok::semi)
+    if (Tokens->back().kind() == tok::semi)
       return Tokens;
-    return withTrailingSemicolon(Tokens);
+    return withTrailingSemicolon(*Tokens);
   }
 
 private:
@@ -537,13 +543,12 @@ public:
     auto Declarator = getDeclaratorRange(
         Builder.sourceManager(), DD->getTypeSourceInfo()->getTypeLoc(),
         getQualifiedNameStart(DD), Initializer);
-    if (Declarator.isValid()) {
-      auto *N = new (allocator()) syntax::SimpleDeclarator;
-      Builder.foldNode(
-          Builder.getRange(Declarator.getBegin(), Declarator.getEnd()), N, DD);
-      Builder.markChild(N, syntax::NodeRole::SimpleDeclaration_declarator);
-    }
-
+    if (!Declarator.isValid())
+      return true;
+    auto *N = new (allocator()) syntax::SimpleDeclarator;
+    Builder.foldNode(
+        *Builder.getRange(Declarator.getBegin(), Declarator.getEnd()), N, DD);
+    Builder.markChild(N, syntax::NodeRole::SimpleDeclaration_declarator);
     return true;
   }
 
@@ -554,11 +559,11 @@ public:
     auto R = getDeclaratorRange(
         Builder.sourceManager(), D->getTypeSourceInfo()->getTypeLoc(),
         /*Name=*/D->getLocation(), /*Initializer=*/SourceRange());
-    if (R.isValid()) {
-      auto *N = new (allocator()) syntax::SimpleDeclarator;
-      Builder.foldNode(Builder.getRange(R.getBegin(), R.getEnd()), N, D);
-      Builder.markChild(N, syntax::NodeRole::SimpleDeclaration_declarator);
-    }
+    if (!R.isValid())
+      return true;
+    auto *N = new (allocator()) syntax::SimpleDeclarator;
+    Builder.foldNode(*Builder.getRange(R.getBegin(), R.getEnd()), N, D);
+    Builder.markChild(N, syntax::NodeRole::SimpleDeclaration_declarator);
     return true;
   }
 
@@ -633,22 +638,24 @@ public:
   }
 
   bool WalkUpFromCompoundStmt(CompoundStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     using NodeRole = syntax::NodeRole;
-
     Builder.markChildToken(S->getLBracLoc(), NodeRole::OpenParen);
     for (auto *Child : S->body())
       Builder.markStmtChild(Child, NodeRole::CompoundStatement_statement);
     Builder.markChildToken(S->getRBracLoc(), NodeRole::CloseParen);
-
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::CompoundStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::CompoundStatement, S);
     return true;
   }
 
   // Some statements are not yet handled by syntax trees.
   bool WalkUpFromStmt(Stmt *S) {
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::UnknownStatement, S);
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
+    Builder.foldNode(*R, new (allocator()) syntax::UnknownStatement, S);
     return true;
   }
 
@@ -685,8 +692,10 @@ public:
   // Some expressions are not yet handled by syntax trees.
   bool WalkUpFromExpr(Expr *E) {
     assert(!isImplicitExpr(E) && "should be handled by TraverseStmt");
-    Builder.foldNode(Builder.getExprRange(E),
-                     new (allocator()) syntax::UnknownExpression, E);
+    auto R = Builder.getExprRange(E);
+    if (!R)
+      return true;
+    Builder.foldNode(*R, new (allocator()) syntax::UnknownExpression, E);
     return true;
   }
 
@@ -710,51 +719,58 @@ public:
   }
 
   bool WalkUpFromParenTypeLoc(ParenTypeLoc L) {
+    auto R = Builder.getRange(L.getLParenLoc(), L.getRParenLoc());
+    if (!R)
+      return true;
     Builder.markChildToken(L.getLParenLoc(), syntax::NodeRole::OpenParen);
     Builder.markChildToken(L.getRParenLoc(), syntax::NodeRole::CloseParen);
-    Builder.foldNode(Builder.getRange(L.getLParenLoc(), L.getRParenLoc()),
-                     new (allocator()) syntax::ParenDeclarator, L);
+    Builder.foldNode(*R, new (allocator()) syntax::ParenDeclarator, L);
     return true;
   }
 
   // Declarator chunks, they are produced by type locs and some clang::Decls.
   bool WalkUpFromArrayTypeLoc(ArrayTypeLoc L) {
+    auto R = Builder.getRange(L.getLBracketLoc(), L.getRBracketLoc());
+    if (!R)
+      return true;
     Builder.markChildToken(L.getLBracketLoc(), syntax::NodeRole::OpenParen);
     Builder.markExprChild(L.getSizeExpr(),
                           syntax::NodeRole::ArraySubscript_sizeExpression);
     Builder.markChildToken(L.getRBracketLoc(), syntax::NodeRole::CloseParen);
-    Builder.foldNode(Builder.getRange(L.getLBracketLoc(), L.getRBracketLoc()),
-                     new (allocator()) syntax::ArraySubscript, L);
+    Builder.foldNode(*R, new (allocator()) syntax::ArraySubscript, L);
     return true;
   }
 
   bool WalkUpFromFunctionTypeLoc(FunctionTypeLoc L) {
-    Builder.markChildToken(L.getLParenLoc(), syntax::NodeRole::OpenParen);
-    for (auto *P : L.getParams())
-      Builder.markDelayedChild(
-          Builder.getDeclRange(P),
-          syntax::NodeRole::ParametersAndQualifiers_parameter);
-    Builder.markChildToken(L.getRParenLoc(), syntax::NodeRole::CloseParen);
-    Builder.foldNode(Builder.getRange(L.getLParenLoc(), L.getEndLoc()),
-                     new (allocator()) syntax::ParametersAndQualifiers, L);
+    auto R = Builder.getRange(L.getLParenLoc(), L.getEndLoc());
+    if (!R)
+      return true;
+    buildParametersAndQualifiers(*R, L);
     return true;
   }
 
   bool WalkUpFromFunctionProtoTypeLoc(FunctionProtoTypeLoc L) {
-    if (!L.getTypePtr()->hasTrailingReturn())
-      return WalkUpFromFunctionTypeLoc(L);
-
+    auto R = Builder.getRange(L.getLParenLoc(), L.getEndLoc());
+    if (!R)
+      return true;
+    if (!L.getTypePtr()->hasTrailingReturn()) {
+      buildParametersAndQualifiers(*R, L);
+      return true;
+    }
     auto TrailingReturnTokens = BuildTrailingReturn(L);
     // Finish building the node for parameters.
     Builder.markChild(TrailingReturnTokens,
                       syntax::NodeRole::ParametersAndQualifiers_trailingReturn);
-    return WalkUpFromFunctionTypeLoc(L);
+    buildParametersAndQualifiers(*R, L);
+    return true;
   }
 
   bool WalkUpFromMemberPointerTypeLoc(MemberPointerTypeLoc L) {
     auto SR = L.getLocalSourceRange();
-    Builder.foldNode(Builder.getRange(SR.getBegin(), SR.getEnd()),
-                     new (allocator()) syntax::MemberPointer, L);
+    auto R = Builder.getRange(SR.getBegin(), SR.getEnd());
+    if (!R)
+      return true;
+    Builder.foldNode(*R, new (allocator()) syntax::MemberPointer, L);
     return true;
   }
 
@@ -762,46 +778,59 @@ public:
   // preprocessor magic. We merely assign roles to the corresponding children
   // and fold resulting nodes.
   bool WalkUpFromDeclStmt(DeclStmt *S) {
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::DeclarationStatement, S);
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
+    Builder.foldNode(*R, new (allocator()) syntax::DeclarationStatement, S);
     return true;
   }
 
   bool WalkUpFromNullStmt(NullStmt *S) {
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::EmptyStatement, S);
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
+    Builder.foldNode(*R, new (allocator()) syntax::EmptyStatement, S);
     return true;
   }
 
   bool WalkUpFromSwitchStmt(SwitchStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getSwitchLoc(),
                            syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getBody(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::SwitchStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::SwitchStatement, S);
     return true;
   }
 
   bool WalkUpFromCaseStmt(CaseStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getKeywordLoc(),
                            syntax::NodeRole::IntroducerKeyword);
     Builder.markExprChild(S->getLHS(), syntax::NodeRole::CaseStatement_value);
     Builder.markStmtChild(S->getSubStmt(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::CaseStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::CaseStatement, S);
     return true;
   }
 
   bool WalkUpFromDefaultStmt(DefaultStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getKeywordLoc(),
                            syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getSubStmt(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::DefaultStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::DefaultStatement, S);
     return true;
   }
 
   bool WalkUpFromIfStmt(IfStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getIfLoc(), syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getThen(),
                           syntax::NodeRole::IfStatement_thenStatement);
@@ -809,59 +838,70 @@ public:
                            syntax::NodeRole::IfStatement_elseKeyword);
     Builder.markStmtChild(S->getElse(),
                           syntax::NodeRole::IfStatement_elseStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::IfStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::IfStatement, S);
     return true;
   }
 
   bool WalkUpFromForStmt(ForStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getForLoc(), syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getBody(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::ForStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::ForStatement, S);
     return true;
   }
 
   bool WalkUpFromWhileStmt(WhileStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getWhileLoc(),
                            syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getBody(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::WhileStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::WhileStatement, S);
     return true;
   }
 
   bool WalkUpFromContinueStmt(ContinueStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getContinueLoc(),
                            syntax::NodeRole::IntroducerKeyword);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::ContinueStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::ContinueStatement, S);
     return true;
   }
 
   bool WalkUpFromBreakStmt(BreakStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getBreakLoc(),
                            syntax::NodeRole::IntroducerKeyword);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::BreakStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::BreakStatement, S);
     return true;
   }
 
   bool WalkUpFromReturnStmt(ReturnStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getReturnLoc(),
                            syntax::NodeRole::IntroducerKeyword);
     Builder.markExprChild(S->getRetValue(),
                           syntax::NodeRole::ReturnStatement_value);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::ReturnStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::ReturnStatement, S);
     return true;
   }
 
   bool WalkUpFromCXXForRangeStmt(CXXForRangeStmt *S) {
+    auto R = Builder.getStmtRange(S);
+    if (!R)
+      return true;
     Builder.markChildToken(S->getForLoc(), syntax::NodeRole::IntroducerKeyword);
     Builder.markStmtChild(S->getBody(), syntax::NodeRole::BodyStatement);
-    Builder.foldNode(Builder.getStmtRange(S),
-                     new (allocator()) syntax::RangeBasedForStatement, S);
+    Builder.foldNode(*R, new (allocator()) syntax::RangeBasedForStatement, S);
     return true;
   }
 
@@ -938,17 +978,18 @@ private:
     syntax::SimpleDeclarator *ReturnDeclarator = nullptr;
     if (ReturnDeclaratorRange.isValid()) {
       ReturnDeclarator = new (allocator()) syntax::SimpleDeclarator;
-      Builder.foldNode(Builder.getRange(ReturnDeclaratorRange.getBegin(),
-                                        ReturnDeclaratorRange.getEnd()),
+      Builder.foldNode(*Builder.getRange(ReturnDeclaratorRange.getBegin(),
+                                         ReturnDeclaratorRange.getEnd()),
                        ReturnDeclarator, nullptr);
     }
 
     // Build node for trailing return type.
     auto Return =
         Builder.getRange(ReturnedType.getBeginLoc(), ReturnedType.getEndLoc());
-    auto *Arrow = Return.begin() - 1;
+    assert(Return.hasValue());
+    auto *Arrow = Return->begin() - 1;
     assert(Arrow->kind() == tok::arrow);
-    auto Tokens = llvm::makeArrayRef(Arrow, Return.end());
+    auto Tokens = llvm::makeArrayRef(Arrow, Return->end());
     Builder.markChildToken(Arrow, syntax::NodeRole::TrailingReturnType_arrow);
     if (ReturnDeclarator)
       Builder.markChild(ReturnDeclarator,
@@ -988,6 +1029,18 @@ private:
     auto *N = new (allocator()) syntax::TemplateDeclaration;
     Builder.foldNode(Range, N, From);
     return N;
+  }
+
+  void buildParametersAndQualifiers(llvm::ArrayRef<syntax::Token> Range,
+                                    FunctionTypeLoc L) {
+    Builder.markChildToken(L.getLParenLoc(), syntax::NodeRole::OpenParen);
+    for (auto *P : L.getParams())
+      Builder.markDelayedChild(
+          Builder.getDeclRange(P),
+          syntax::NodeRole::ParametersAndQualifiers_parameter);
+    Builder.markChildToken(L.getRParenLoc(), syntax::NodeRole::CloseParen);
+    Builder.foldNode(Range, new (allocator()) syntax::ParametersAndQualifiers,
+                     L);
   }
 
   /// A small helper to save some typing.
@@ -1055,7 +1108,7 @@ void syntax::TreeBuilder::markStmtChild(Stmt *Child, NodeRole Role) {
     setRole(ChildNode, NodeRole::ExpressionStatement_expression);
     ChildNode = new (allocator()) syntax::ExpressionStatement;
     // (!) 'getStmtRange()' ensures this covers a trailing semicolon.
-    Pending.foldChildren(Arena, getStmtRange(Child), ChildNode);
+    Pending.foldChildren(Arena, *getStmtRange(Child), ChildNode);
   }
   setRole(ChildNode, Role);
 }
