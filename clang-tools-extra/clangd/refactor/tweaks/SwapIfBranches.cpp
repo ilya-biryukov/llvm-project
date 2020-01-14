@@ -17,11 +17,15 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Core/Replacement.h"
+#include "clang/Tooling/Syntax/Mutations.h"
+#include "clang/Tooling/Syntax/Nodes.h"
+#include "clang/Tooling/Syntax/Tree.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace clang {
 namespace clangd {
@@ -42,55 +46,43 @@ public:
   Intent intent() const override { return Refactor; }
 
 private:
-  const IfStmt *If = nullptr;
+  syntax::IfStatement *If = nullptr;
 };
 
 REGISTER_TWEAK(SwapIfBranches)
 
 bool SwapIfBranches::prepare(const Selection &Inputs) {
-  for (const SelectionTree::Node *N = Inputs.ASTSelection.commonAncestor();
-       N && !If; N = N->Parent) {
+  for (auto *N = Inputs.SelectedNode; N && !If; N = N->parent()) {
     // Stop once we hit a block, e.g. a lambda in the if condition.
-    if (dyn_cast_or_null<CompoundStmt>(N->ASTNode.get<Stmt>()))
+    if (isa<syntax::CompoundStatement>(N))
       return false;
-    If = dyn_cast_or_null<IfStmt>(N->ASTNode.get<Stmt>());
+    If = dyn_cast<syntax::IfStatement>(N);
   }
+  if (!If)
+    return false;
+  auto *Then = If->thenStatement();
+  auto *Else = If->elseStatement();
   // avoid dealing with single-statement brances, they require careful handling
   // to avoid changing semantics of the code (i.e. dangling else).
-  return If && dyn_cast_or_null<CompoundStmt>(If->getThen()) &&
-         dyn_cast_or_null<CompoundStmt>(If->getElse());
+  return Then && Else && isa<syntax::CompoundStatement>(Then) &&
+         Then->canModify() && isa<syntax::CompoundStatement>(Else) &&
+         Else->canModify();
 }
 
 Expected<Tweak::Effect> SwapIfBranches::apply(const Selection &Inputs) {
-  auto &Ctx = Inputs.AST->getASTContext();
-  auto &SrcMgr = Inputs.AST->getSourceManager();
+  auto &A = const_cast<syntax::Arena&>(Inputs.SynArena);
 
-  auto ThenRng = toHalfOpenFileRange(SrcMgr, Ctx.getLangOpts(),
-                                     If->getThen()->getSourceRange());
-  if (!ThenRng)
-    return llvm::createStringError(
-        llvm::inconvertibleErrorCode(),
-        "Could not obtain range of the 'then' branch. Macros?");
-  auto ElseRng = toHalfOpenFileRange(SrcMgr, Ctx.getLangOpts(),
-                                     If->getElse()->getSourceRange());
-  if (!ElseRng)
-    return llvm::createStringError(
-        llvm::inconvertibleErrorCode(),
-        "Could not obtain range of the 'else' branch. Macros?");
+  auto *Then = If->thenStatement();
+  auto *Else = If->elseStatement();
 
-  auto ThenCode = toSourceCode(SrcMgr, *ThenRng);
-  auto ElseCode = toSourceCode(SrcMgr, *ElseRng);
+  syntax::removeStatement(A, Then);
+  syntax::removeStatement(A, Else);
 
-  tooling::Replacements Result;
-  if (auto Err = Result.add(tooling::Replacement(Ctx.getSourceManager(),
-                                                 ThenRng->getBegin(),
-                                                 ThenCode.size(), ElseCode)))
-    return std::move(Err);
-  if (auto Err = Result.add(tooling::Replacement(Ctx.getSourceManager(),
-                                                 ElseRng->getBegin(),
-                                                 ElseCode.size(), ThenCode)))
-    return std::move(Err);
-  return Effect::mainFileEdit(SrcMgr, std::move(Result));
+  syntax::replaceStatement(A, If->thenStatement(), Else);
+  syntax::replaceStatement(A, If->elseStatement(), Then);
+
+  return Effect::mainFileEdit(A.sourceManager(),
+                              syntax::computeReplacements(A, *Inputs.SynTU));
 }
 
 } // namespace

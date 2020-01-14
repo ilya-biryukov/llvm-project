@@ -70,7 +70,7 @@ Tweak::Selection::Selection(const SymbolIndex *Index, ParsedAST &AST,
     : Index(Index), AST(&AST), SelectionBegin(RangeBegin),
       SelectionEnd(RangeEnd),
       ASTSelection(AST.getASTContext(), AST.getTokens(), RangeBegin, RangeEnd),
-      SynArena(AST.getSourceManager(), AST.getLangOpts(), AST.getTokens()) {
+      SynArena(AST.getTokens(), AST.getSourceManager(), AST.getLangOpts()) {
   auto &SM = AST.getSourceManager();
   Code = SM.getBufferData(SM.getMainFileID());
   Cursor = SM.getComposedLoc(SM.getMainFileID(), RangeBegin);
