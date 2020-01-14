@@ -31,6 +31,14 @@ tooling::Replacements computeReplacements(const Arena &A,
 /// EXPECTS: S->canModify() == true
 void removeStatement(syntax::Arena &A, syntax::Statement *S);
 
+/// Replaces a statement \p Old with \p New.
+/// FIXME: this does not handle corner cases that might change semantics, e.g.
+///        introduce dangling else when replacing compound statement with an
+///        if statement. Add braces in those cases.
+/// EXPECTS: Old->canModify() && New->isDetached()
+void replaceStatement(syntax::Arena &A, syntax::Statement *Old,
+                      syntax::Statement *New);
+
 } // namespace syntax
 } // namespace clang
 

@@ -292,7 +292,6 @@ syntax::Node *syntax::commonRoot(syntax::Node *L, syntax::Node *R) {
   return L;
 }
 
-
 std::pair<syntax::Leaf *, syntax::Leaf *>
 findTokens(llvm::ArrayRef<syntax::Token> Tokens,
            syntax::TranslationUnit *Root) {

@@ -96,3 +96,8 @@ void syntax::removeStatement(syntax::Arena &A, syntax::Statement *S) {
 
   MutationsImpl::replace(S, createEmptyStatement(A));
 }
+
+void syntax::replaceStatement(syntax::Arena &A, syntax::Statement *Old,
+                              syntax::Statement *New) {
+  MutationsImpl::replace(Old, New);
+}
