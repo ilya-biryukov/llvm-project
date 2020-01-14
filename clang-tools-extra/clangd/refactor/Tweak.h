@@ -26,6 +26,8 @@
 #include "SourceCode.h"
 #include "index/Index.h"
 #include "clang/Tooling/Core/Replacement.h"
+#include "clang/Tooling/Syntax/Nodes.h"
+#include "clang/Tooling/Syntax/Tree.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -64,6 +66,11 @@ public:
     unsigned SelectionEnd;
     /// The AST nodes that were selected.
     SelectionTree ASTSelection;
+
+    syntax::Arena SynArena;
+    syntax::TranslationUnit *SynTU;
+    syntax::Node *SelectedNode;
+
     // FIXME: provide a way to get sources and ASTs for other files.
   };
 

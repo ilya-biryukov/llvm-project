@@ -81,6 +81,12 @@ struct FileRange {
   /// Convert to the clang range. The returned range is always a char range,
   /// never a token range.
   CharSourceRange toCharRange(const SourceManager &SM) const;
+  SourceLocation beginLocation(const SourceManager &SM) const {
+    return SM.getLocForStartOfFile(File).getLocWithOffset(Begin);
+  }
+  SourceLocation endLocation(const SourceManager &SM) const {
+    return SM.getLocForStartOfFile(File).getLocWithOffset(End);
+  }
 
   friend bool operator==(const FileRange &L, const FileRange &R) {
     return std::tie(L.File, L.Begin, L.End) == std::tie(R.File, R.Begin, R.End);
@@ -356,14 +362,17 @@ const syntax::Token *
 spelledIdentifierTouching(SourceLocation Loc,
                           const syntax::TokenBuffer &Tokens);
 
-/// Lex the text buffer, corresponding to \p FID, in raw mode and record the
-/// resulting spelled tokens. Does minimal post-processing on raw identifiers,
-/// setting the appropriate token kind (instead of the raw_identifier reported
-/// by lexer in raw mode). This is a very low-level function, most users should
-/// prefer to use TokenCollector. Lexing in raw mode produces wildly different
-/// results from what one might expect when running a C++ frontend, e.g.
-/// preprocessor does not run at all.
-/// The result will *not* have a 'eof' token at the end.
+llvm::ArrayRef<syntax::Token> selectedTokens(FileRange Selected,
+                                             const syntax::TokenBuffer &Tokens);
+
+/// Lex the text buffer, corresponding to \p FID, in raw mode and record
+/// the resulting spelled tokens. Does minimal post-processing on raw
+/// identifiers, setting the appropriate token kind (instead of the
+/// raw_identifier reported by lexer in raw mode). This is a very
+/// low-level function, most users should prefer to use TokenCollector.
+/// Lexing in raw mode produces wildly different results from what one
+/// might expect when running a C++ frontend, e.g. preprocessor does not
+/// run at all. The result will *not* have a 'eof' token at the end.
 std::vector<syntax::Token> tokenize(FileID FID, const SourceManager &SM,
                                     const LangOptions &LO);
 

@@ -33,13 +33,9 @@ static void traverse(syntax::Node *N,
 };
 } // namespace
 
-syntax::Arena::Arena(SourceManager &SourceMgr, const LangOptions &LangOpts,
-                     TokenBuffer Tokens)
+syntax::Arena::Arena(const TokenBuffer &Tokens, SourceManager &SourceMgr,
+                     const LangOptions &LangOpts)
     : SourceMgr(SourceMgr), LangOpts(LangOpts), Tokens(std::move(Tokens)) {}
-
-const clang::syntax::TokenBuffer &syntax::Arena::tokenBuffer() const {
-  return Tokens;
-}
 
 std::pair<FileID, llvm::ArrayRef<syntax::Token>>
 syntax::Arena::lexBuffer(std::unique_ptr<llvm::MemoryBuffer> Input) {
@@ -293,8 +289,8 @@ syntax::Node *syntax::commonRoot(syntax::Node *L, syntax::Node *R) {
 }
 
 std::pair<syntax::Leaf *, syntax::Leaf *>
-findTokens(llvm::ArrayRef<syntax::Token> Tokens,
-           syntax::TranslationUnit *Root) {
+syntax::findTokens(llvm::ArrayRef<syntax::Token> Tokens,
+                   syntax::TranslationUnit *Root) {
   assert(!Tokens.empty());
   assert(Root->isOriginal());
 
@@ -306,7 +302,7 @@ findTokens(llvm::ArrayRef<syntax::Token> Tokens,
       return;
     if (L->token() == &Tokens.front())
       Front = L;
-    else if (L->token() == &Tokens.back())
+    if (L->token() == &Tokens.back())
       Back = L;
   });
   assert(Front != nullptr);

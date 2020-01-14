@@ -38,13 +38,13 @@ namespace syntax {
 /// source manager, etc.
 class Arena {
 public:
-  Arena(SourceManager &SourceMgr, const LangOptions &LangOpts,
-        TokenBuffer Tokens);
+  Arena(const TokenBuffer &Tokens, SourceManager &SourceMgr,
+        const LangOptions &LangOpts);
 
   const SourceManager &sourceManager() const { return SourceMgr; }
   const LangOptions &langOptions() const { return LangOpts; }
 
-  const TokenBuffer &tokenBuffer() const;
+  const TokenBuffer &tokenBuffer() const { return Tokens; }
   llvm::BumpPtrAllocator &allocator() { return Allocator; }
 
   /// Add \p Buffer to the underlying source manager, tokenize it and store the
@@ -56,7 +56,7 @@ public:
 private:
   SourceManager &SourceMgr;
   const LangOptions &LangOpts;
-  TokenBuffer Tokens;
+  const TokenBuffer &Tokens;
   /// IDs and storage for additional tokenized files.
   llvm::DenseMap<FileID, std::vector<syntax::Token>> ExtraTokens;
   /// Keeps all the allocated nodes and their intermediate data structures.

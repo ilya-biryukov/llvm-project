@@ -10,6 +10,10 @@
 #include "Path.h"
 #include "SourceCode.h"
 #include "index/Index.h"
+#include "clang/Tooling/Syntax/BuildTree.h"
+#include "clang/Tooling/Syntax/Nodes.h"
+#include "clang/Tooling/Syntax/Tokens.h"
+#include "clang/Tooling/Syntax/Tree.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
@@ -43,16 +47,38 @@ void validateRegistry() {
   }
 #endif
 }
+
+syntax::Node *findSelectedNode(const syntax::Arena &A,
+                               syntax::FileRange Selected,
+                               syntax::TranslationUnit *Root) {
+  assert(Selected.file() == A.sourceManager().getMainFileID());
+  auto Spelled = syntax::selectedTokens(Selected, A.tokenBuffer());
+  if (Spelled.empty())
+    return nullptr;
+  auto Expanded = A.tokenBuffer().expandedForSpelled(Spelled);
+  if (Expanded.size() != 1)
+    return nullptr;
+  syntax::Leaf *First;
+  syntax::Leaf *Last;
+  std::tie(First, Last) = syntax::findTokens(Expanded.front(), Root);
+  return syntax::commonRoot(First, Last);
+}
 } // namespace
 
 Tweak::Selection::Selection(const SymbolIndex *Index, ParsedAST &AST,
                             unsigned RangeBegin, unsigned RangeEnd)
     : Index(Index), AST(&AST), SelectionBegin(RangeBegin),
       SelectionEnd(RangeEnd),
-      ASTSelection(AST.getASTContext(), AST.getTokens(), RangeBegin, RangeEnd) {
+      ASTSelection(AST.getASTContext(), AST.getTokens(), RangeBegin, RangeEnd),
+      SynArena(AST.getSourceManager(), AST.getLangOpts(), AST.getTokens()) {
   auto &SM = AST.getSourceManager();
   Code = SM.getBufferData(SM.getMainFileID());
   Cursor = SM.getComposedLoc(SM.getMainFileID(), RangeBegin);
+  SynTU = syntax::buildSyntaxTree(
+      SynArena, *AST.getASTContext().getTranslationUnitDecl());
+  SelectedNode = findSelectedNode(
+      SynArena, syntax::FileRange(SM.getMainFileID(), RangeBegin, RangeEnd),
+      SynTU);
 }
 
 std::vector<std::unique_ptr<Tweak>>

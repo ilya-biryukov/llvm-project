@@ -321,18 +321,38 @@ TokenBuffer::expansionStartingAt(const syntax::Token *Spelled) const {
   return E;
 }
 
+static llvm::ArrayRef<syntax::Token>
+tokensTouching(SourceLocation Loc, llvm::ArrayRef<syntax::Token> Tokens,
+               const SourceManager &SM) {
+  assert(Loc.isFileID());
+  auto *Right = llvm::partition_point(Tokens, [&](const syntax::Token &Tok) {
+    assert(SM.getFileID(Tok.location()) == SM.getFileID(Loc));
+    return Tok.location() < Loc;
+  });
+  bool AcceptRight = Right != Tokens.end() && Right->location() <= Loc;
+  bool AcceptLeft =
+      Right != Tokens.begin() && (Right - 1)->endLocation() >= Loc;
+  return llvm::makeArrayRef(Right - (AcceptLeft ? 1 : 0),
+                            Right + (AcceptRight ? 1 : 0));
+}
+
+const syntax::Token *tokenContaining(SourceLocation Loc,
+                                     llvm::ArrayRef<syntax::Token> Tokens,
+                                     const SourceManager &SM) {
+  for (auto &T : tokensTouching(Loc, Tokens, SM)) {
+    if (T.location() <= Loc && Loc < T.endLocation())
+      return &T;
+  }
+  return nullptr;
+}
+
 llvm::ArrayRef<syntax::Token>
 syntax::spelledTokensTouching(SourceLocation Loc,
                               const syntax::TokenBuffer &Tokens) {
   assert(Loc.isFileID());
-  llvm::ArrayRef<syntax::Token> All =
-      Tokens.spelledTokens(Tokens.sourceManager().getFileID(Loc));
-  auto *Right = llvm::partition_point(
-      All, [&](const syntax::Token &Tok) { return Tok.location() < Loc; });
-  bool AcceptRight = Right != All.end() && Right->location() <= Loc;
-  bool AcceptLeft = Right != All.begin() && (Right - 1)->endLocation() >= Loc;
-  return llvm::makeArrayRef(Right - (AcceptLeft ? 1 : 0),
-                            Right + (AcceptRight ? 1 : 0));
+  return tokensTouching(
+      Loc, Tokens.spelledTokens(Tokens.sourceManager().getFileID(Loc)),
+      Tokens.sourceManager());
 }
 
 const syntax::Token *
@@ -343,6 +363,23 @@ syntax::spelledIdentifierTouching(SourceLocation Loc,
       return &Tok;
   }
   return nullptr;
+}
+
+
+llvm::ArrayRef<syntax::Token>
+syntax::selectedTokens(FileRange Selected, const syntax::TokenBuffer &Tokens) {
+  auto &SM = Tokens.sourceManager();
+  llvm::ArrayRef<syntax::Token> All = Tokens.spelledTokens(Selected.file());
+  auto *L = tokenContaining(Selected.beginLocation(SM), All, SM);
+  if (!L)
+    return {};
+  if (Selected.length() == 0)
+    return *L;
+  auto *R =
+      tokenContaining(Selected.endLocation(SM).getLocWithOffset(-1), All, SM);
+  if (!R)
+    return {};
+  return llvm::makeArrayRef(L, R + 1);
 }
 
 std::vector<const syntax::Token *>

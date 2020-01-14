@@ -53,43 +53,49 @@ protected:
     class BuildSyntaxTree : public ASTConsumer {
     public:
       BuildSyntaxTree(syntax::TranslationUnit *&Root,
+                      std::unique_ptr<syntax::TokenBuffer> &Tokens,
                       std::unique_ptr<syntax::Arena> &Arena,
-                      std::unique_ptr<syntax::TokenCollector> Tokens)
-          : Root(Root), Arena(Arena), Tokens(std::move(Tokens)) {
-        assert(this->Tokens);
+                      std::unique_ptr<syntax::TokenCollector> TokenCollector)
+          : Root(Root), Tokens(Tokens), Arena(Arena),
+            TokenCollector(std::move(TokenCollector)) {
+        assert(this->TokenCollector);
       }
 
       void HandleTranslationUnit(ASTContext &Ctx) override {
-        Arena = std::make_unique<syntax::Arena>(Ctx.getSourceManager(),
-                                                Ctx.getLangOpts(),
-                                                std::move(*Tokens).consume());
-        Tokens = nullptr; // make sure we fail if this gets called twice.
+        Tokens = std::make_unique<syntax::TokenBuffer>(
+            std::move(*TokenCollector).consume());
+        Arena = std::make_unique<syntax::Arena>(*Tokens, Ctx.getSourceManager(),
+                                                Ctx.getLangOpts());
+        TokenCollector = nullptr; // make sure we fail if called twice.
         Root = syntax::buildSyntaxTree(*Arena, *Ctx.getTranslationUnitDecl());
       }
 
     private:
       syntax::TranslationUnit *&Root;
+      std::unique_ptr<syntax::TokenBuffer> &Tokens;
       std::unique_ptr<syntax::Arena> &Arena;
-      std::unique_ptr<syntax::TokenCollector> Tokens;
+      std::unique_ptr<syntax::TokenCollector> TokenCollector;
     };
 
     class BuildSyntaxTreeAction : public ASTFrontendAction {
     public:
       BuildSyntaxTreeAction(syntax::TranslationUnit *&Root,
+                            std::unique_ptr<syntax::TokenBuffer> &Tokens,
                             std::unique_ptr<syntax::Arena> &Arena)
-          : Root(Root), Arena(Arena) {}
+          : Root(Root), Tokens(Tokens), Arena(Arena) {}
 
       std::unique_ptr<ASTConsumer>
       CreateASTConsumer(CompilerInstance &CI, StringRef InFile) override {
         // We start recording the tokens, ast consumer will take on the result.
-        auto Tokens =
+        auto TokenCollector =
             std::make_unique<syntax::TokenCollector>(CI.getPreprocessor());
-        return std::make_unique<BuildSyntaxTree>(Root, Arena,
-                                                 std::move(Tokens));
+        return std::make_unique<BuildSyntaxTree>(Root, Tokens, Arena,
+                                                 std::move(TokenCollector));
       }
 
     private:
       syntax::TranslationUnit *&Root;
+      std::unique_ptr<syntax::TokenBuffer> &Tokens;
       std::unique_ptr<syntax::Arena> &Arena;
     };
 
@@ -112,7 +118,7 @@ protected:
     Compiler.setSourceManager(SourceMgr.get());
 
     syntax::TranslationUnit *Root = nullptr;
-    BuildSyntaxTreeAction Recorder(Root, this->Arena);
+    BuildSyntaxTreeAction Recorder(Root, this->Tokens, this->Arena);
     if (!Compiler.ExecuteAction(Recorder)) {
       ADD_FAILURE() << "failed to run the frontend";
       std::abort();
@@ -160,6 +166,7 @@ protected:
       new SourceManager(*Diags, *FileMgr);
   std::shared_ptr<CompilerInvocation> Invocation;
   // Set after calling buildTree().
+  std::unique_ptr<syntax::TokenBuffer> Tokens;
   std::unique_ptr<syntax::Arena> Arena;
 };
 
