@@ -35,9 +35,17 @@ void removeStatement(syntax::Arena &A, syntax::Statement *S);
 /// FIXME: this does not handle corner cases that might change semantics, e.g.
 ///        introduce dangling else when replacing compound statement with an
 ///        if statement. Add braces in those cases.
-/// EXPECTS: Old->canModify() && New->isDetached()
-void replaceStatement(syntax::Arena &A, syntax::Statement *Old,
-                      syntax::Statement *New);
+/// Returns the new statement that replaced \p Old. It is either \p New or a
+/// compound statement, wrapping \p New to avoid danlging else.
+///
+/// EXPECTS: Old->canModify() && New->isDetached() && New->canModify()
+syntax::Statement *replaceStatement(syntax::Arena &A, syntax::Statement *Old,
+                                    syntax::Statement *New);
+
+/// FIXME: add canPrepend() check.
+/// EXPECTS: New->isDetached()
+void prependChildStatement(syntax::Arena &A, syntax::CompoundStatement *Parent,
+                           syntax::Statement *New);
 
 } // namespace syntax
 } // namespace clang

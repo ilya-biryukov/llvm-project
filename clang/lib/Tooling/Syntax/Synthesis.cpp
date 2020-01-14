@@ -5,7 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+#include "clang/Basic/TokenKinds.h"
 #include "clang/Tooling/Syntax/BuildTree.h"
+#include "clang/Tooling/Syntax/Nodes.h"
+#include "clang/Tooling/Syntax/Tree.h"
 
 using namespace clang;
 
@@ -40,6 +43,19 @@ syntax::createEmptyStatement(clang::syntax::Arena &A) {
   FactoryImpl::setCanModify(S);
   FactoryImpl::prependChildLowLevel(S, createPunctuation(A, clang::tok::semi),
                                     NodeRole::Unknown);
+  S->assertInvariants();
+  return S;
+}
+
+syntax::CompoundStatement *createCompoundStatement(clang::syntax::Arena &A) {
+  auto *S = new (A.allocator()) clang::syntax::CompoundStatement;
+  syntax::FactoryImpl::setCanModify(S);
+  syntax::FactoryImpl::prependChildLowLevel(
+      S, syntax::createPunctuation(A, clang::tok::r_brace),
+      syntax::NodeRole::OpenParen);
+  syntax::FactoryImpl::prependChildLowLevel(
+      S, syntax::createPunctuation(A, clang::tok::l_brace),
+      syntax::NodeRole::CloseParen);
   S->assertInvariants();
   return S;
 }

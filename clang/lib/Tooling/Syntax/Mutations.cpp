@@ -97,7 +97,52 @@ void syntax::removeStatement(syntax::Arena &A, syntax::Statement *S) {
   MutationsImpl::replace(S, createEmptyStatement(A));
 }
 
-void syntax::replaceStatement(syntax::Arena &A, syntax::Statement *Old,
-                              syntax::Statement *New) {
+namespace {
+bool replaceIntroducesDanglingElse(syntax::Statement *Old,
+                                   syntax::Statement *New) {
+  auto *OldIf = dyn_cast<syntax::IfStatement>(Old->parent());
+  // FIXME: what if we're an inner statement?
+  if (!OldIf || Old->role() != syntax::NodeRole::IfStatement_thenStatement)
+    return false;
+  // FIXME: what if we're introducing this problem higher up the chain?
+  if (!OldIf->elseKeyword())
+    return false;
+  // FIXME: what if the problem is lower in the tree?
+  auto *NewIf = dyn_cast<syntax::IfStatement>(New);
+  if (!NewIf)
+    return false;
+  // FIXME: what if the problem is lower in the else subtree?
+  if (NewIf->elseKeyword())
+    return false;
+  return true;
+}
+} // namespace
+
+syntax::Statement *syntax::replaceStatement(syntax::Arena &A,
+                                            syntax::Statement *Old,
+                                            syntax::Statement *New) {
+  assert(Old);
+  assert(New);
+  assert(New->canModify());
+  assert(New->isDetached());
+
+  if (replaceIntroducesDanglingElse(Old, New)) {
+    auto *Wrapper = createCompoundStatement(A);
+    prependChildStatement(A, Wrapper, New);
+    New = Wrapper;
+  }
+
   MutationsImpl::replace(Old, New);
+  return New;
+}
+
+void syntax::prependChildStatement(syntax::Arena &A,
+                                   syntax::CompoundStatement *Parent,
+                                   syntax::Statement *New) {
+  assert(Parent);
+  assert(New);
+  assert(New->isDetached());
+
+  MutationsImpl::addAfter(Parent->lbrace(), New,
+                          NodeRole::CompoundStatement_statement);
 }

@@ -24,9 +24,10 @@ syntax::TranslationUnit *buildSyntaxTree(Arena &A,
 
 // Create syntax trees from subtrees not backed by the source code.
 
-clang::syntax::Leaf *createPunctuation(clang::syntax::Arena &A,
-                                       clang::tok::TokenKind K);
-clang::syntax::EmptyStatement *createEmptyStatement(clang::syntax::Arena &A);
+syntax::Leaf *createPunctuation(clang::syntax::Arena &A,
+                                clang::tok::TokenKind K);
+syntax::EmptyStatement *createEmptyStatement(clang::syntax::Arena &A);
+syntax::CompoundStatement *createCompoundStatement(clang::syntax::Arena &A);
 
 } // namespace syntax
 } // namespace clang

@@ -76,11 +76,15 @@ TEST(FileEdits, AbsolutePath) {
 TWEAK_TEST(SwapIfBranches);
 TEST_F(SwapIfBranchesTest, Test) {
   Context = Function;
+  // Then and else branches with compound statements.
   EXPECT_EQ(apply("^if (true) {return 100;} else {continue;}"),
             "if (true) {continue;} else {return 100;}");
   EXPECT_EQ(apply("^if () {return 100;} else {continue;}"),
             "if () {continue;} else {return 100;}")
       << "broken condition";
+  // Then and else branches with non-braced statements.
+  EXPECT_THAT(apply("^if (1) return; else { continue; }"),
+              "if (1) { continue; } else return;");
   EXPECT_AVAILABLE("^i^f^^(^t^r^u^e^) { return 100; } ^e^l^s^e^ { continue; }");
   EXPECT_UNAVAILABLE("if (true) {^return ^100;^ } else { ^continue^;^ }");
   // Available in subexpressions of the condition;
@@ -96,8 +100,6 @@ TEST_F(SwapIfBranchesTest, Test) {
   EXPECT_THAT(
       "if([]{return [[true]];}()) { return 2 + 2 + 2; } else { continue; }",
       Not(isAvailable()));
-  // Not available if both sides aren't braced.
-  EXPECT_THAT("^if (1) return; else { return; }", Not(isAvailable()));
   // Only one if statement is supported!
   EXPECT_THAT("[[if(1){}else{}if(2){}else{}]]", Not(isAvailable()));
 }

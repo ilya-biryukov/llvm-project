@@ -61,12 +61,12 @@ bool SwapIfBranches::prepare(const Selection &Inputs) {
   if (!If)
     return false;
   auto *Then = If->thenStatement();
+  if (!Then || !Then->canModify())
+    return false;
   auto *Else = If->elseStatement();
-  // avoid dealing with single-statement brances, they require careful handling
-  // to avoid changing semantics of the code (i.e. dangling else).
-  return Then && Else && isa<syntax::CompoundStatement>(Then) &&
-         Then->canModify() && isa<syntax::CompoundStatement>(Else) &&
-         Else->canModify();
+  if (!Else || !Else->canModify())
+    return false;
+  return true;
 }
 
 Expected<Tweak::Effect> SwapIfBranches::apply(const Selection &Inputs) {
