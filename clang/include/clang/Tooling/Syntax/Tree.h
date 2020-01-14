@@ -105,6 +105,10 @@ public:
   const Node *nextSibling() const { return NextSibling; }
   Node *nextSibling() { return NextSibling; }
 
+  /// Root has a depth of 0, other nodes have a depth of their parent + 1.
+  /// Runs in O(depth).
+  unsigned computeDepth() const;
+
   /// Dumps the structure of a subtree. For debugging and testing purposes.
   std::string dump(const Arena &A) const;
   /// Dumps the tokens forming this subtree.
@@ -188,6 +192,17 @@ private:
 
   Node *FirstChild = nullptr;
 };
+
+/// Runs in O(depth).
+syntax::Node *commonRoot(syntax::Node *L, syntax::Node *R);
+
+
+class TranslationUnit;
+/// Returns the token nodes, corresponding to the first and the last leaf node.
+/// Runs in O(n).
+/// EXPECTS: Root->isOriginal() && !Tokens.empty()
+std::pair<syntax::Leaf *, syntax::Leaf *>
+findTokens(llvm::ArrayRef<syntax::Token> Tokens, syntax::TranslationUnit *Root);
 
 } // namespace syntax
 } // namespace clang

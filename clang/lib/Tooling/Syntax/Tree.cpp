@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "clang/Tooling/Syntax/Tree.h"
+#include "clang/Basic/LLVM.h"
 #include "clang/Basic/TokenKinds.h"
 #include "clang/Tooling/Syntax/Nodes.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -189,6 +190,13 @@ static void dumpTree(llvm::raw_ostream &OS, const syntax::Node *N,
 }
 } // namespace
 
+unsigned syntax::Node::computeDepth() const {
+  unsigned D = 0;
+  for (const Node *N = this; N->parent(); N = N->parent())
+    ++D;
+  return D;
+}
+
 std::string syntax::Node::dump(const Arena &A) const {
   std::string Str;
   llvm::raw_string_ostream OS(Str);
@@ -264,4 +272,45 @@ syntax::Node *syntax::Tree::findChild(NodeRole R) {
       return C;
   }
   return nullptr;
+}
+
+syntax::Node *syntax::commonRoot(syntax::Node *L, syntax::Node *R) {
+  unsigned LDepth = L->computeDepth();
+  unsigned RDepth = R->computeDepth();
+  while (LDepth < RDepth) {
+    --RDepth;
+    R = R->parent();
+  }
+  while (RDepth < LDepth) {
+    --LDepth;
+    L = L->parent();
+  }
+  while (L != R) {
+    L = L->parent();
+    R = R->parent();
+  }
+  return L;
+}
+
+
+std::pair<syntax::Leaf *, syntax::Leaf *>
+findTokens(llvm::ArrayRef<syntax::Token> Tokens,
+           syntax::TranslationUnit *Root) {
+  assert(!Tokens.empty());
+  assert(Root->isOriginal());
+
+  syntax::Leaf *Front = nullptr;
+  syntax::Leaf *Back = nullptr;
+  traverse(Root, [&](syntax::Node *N) {
+    auto *L = dyn_cast<syntax::Leaf>(N);
+    if (!L)
+      return;
+    if (L->token() == &Tokens.front())
+      Front = L;
+    else if (L->token() == &Tokens.back())
+      Back = L;
+  });
+  assert(Front != nullptr);
+  assert(Back != nullptr);
+  return {Front, Back};
 }
