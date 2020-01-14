@@ -142,6 +142,83 @@ llvm::raw_ostream &syntax::operator<<(llvm::raw_ostream &OS, NodeRole R) {
   llvm_unreachable("invalid role");
 }
 
+syntax::Node *syntax::Node::clone(syntax::Arena &A) const {
+  switch (kind()) {
+  case NodeKind::Leaf:
+    return new (A.allocator()) syntax::Leaf(cast<syntax::Leaf>(this)->token());
+  case NodeKind::TranslationUnit:
+    return new (A.allocator()) syntax::TranslationUnit;
+  case NodeKind::UnknownExpression:
+    return new (A.allocator()) syntax::UnknownExpression;
+  case NodeKind::UnknownStatement:
+    return new (A.allocator()) syntax::UnknownStatement;
+  case NodeKind::DeclarationStatement:
+    return new (A.allocator()) syntax::DeclarationStatement;
+  case NodeKind::EmptyStatement:
+    return new (A.allocator()) syntax::EmptyStatement;
+  case NodeKind::SwitchStatement:
+    return new (A.allocator()) syntax::SwitchStatement;
+  case NodeKind::CaseStatement:
+    return new (A.allocator()) syntax::CaseStatement;
+  case NodeKind::DefaultStatement:
+    return new (A.allocator()) syntax::DefaultStatement;
+  case NodeKind::IfStatement:
+    return new (A.allocator()) syntax::IfStatement;
+  case NodeKind::ForStatement:
+    return new (A.allocator()) syntax::ForStatement;
+  case NodeKind::WhileStatement:
+    return new (A.allocator()) syntax::WhileStatement;
+  case NodeKind::ContinueStatement:
+    return new (A.allocator()) syntax::ContinueStatement;
+  case NodeKind::BreakStatement:
+    return new (A.allocator()) syntax::BreakStatement;
+  case NodeKind::ReturnStatement:
+    return new (A.allocator()) syntax::ReturnStatement;
+  case NodeKind::RangeBasedForStatement:
+    return new (A.allocator()) syntax::RangeBasedForStatement;
+  case NodeKind::ExpressionStatement:
+    return new (A.allocator()) syntax::ExpressionStatement;
+  case NodeKind::CompoundStatement:
+    return new (A.allocator()) syntax::CompoundStatement;
+  case NodeKind::UnknownDeclaration:
+    return new (A.allocator()) syntax::UnknownDeclaration;
+  case NodeKind::EmptyDeclaration:
+    return new (A.allocator()) syntax::EmptyDeclaration;
+  case NodeKind::StaticAssertDeclaration:
+    return new (A.allocator()) syntax::StaticAssertDeclaration;
+  case NodeKind::LinkageSpecificationDeclaration:
+    return new (A.allocator()) syntax::LinkageSpecificationDeclaration;
+  case NodeKind::SimpleDeclaration:
+    return new (A.allocator()) syntax::SimpleDeclaration;
+  case NodeKind::TemplateDeclaration:
+    return new (A.allocator()) syntax::TemplateDeclaration;
+  case NodeKind::ExplicitTemplateInstantiation:
+    return new (A.allocator()) syntax::ExplicitTemplateInstantiation;
+  case NodeKind::NamespaceDefinition:
+    return new (A.allocator()) syntax::NamespaceDefinition;
+  case NodeKind::NamespaceAliasDefinition:
+    return new (A.allocator()) syntax::NamespaceAliasDefinition;
+  case NodeKind::UsingNamespaceDirective:
+    return new (A.allocator()) syntax::UsingNamespaceDirective;
+  case NodeKind::UsingDeclaration:
+    return new (A.allocator()) syntax::UsingDeclaration;
+  case NodeKind::TypeAliasDeclaration:
+    return new (A.allocator()) syntax::TypeAliasDeclaration;
+  case NodeKind::SimpleDeclarator:
+    return new (A.allocator()) syntax::SimpleDeclarator;
+  case NodeKind::ParenDeclarator:
+    return new (A.allocator()) syntax::ParenDeclarator;
+  case NodeKind::ArraySubscript:
+    return new (A.allocator()) syntax::ArraySubscript;
+  case NodeKind::TrailingReturnType:
+    return new (A.allocator()) syntax::TrailingReturnType;
+  case NodeKind::ParametersAndQualifiers:
+    return new (A.allocator()) syntax::ParametersAndQualifiers;
+  case NodeKind::MemberPointer:
+    return new (A.allocator()) syntax::MemberPointer;
+  }
+}
+
 syntax::Leaf *syntax::SwitchStatement::switchKeyword() {
   return llvm::cast_or_null<syntax::Leaf>(
       findChild(syntax::NodeRole::IntroducerKeyword));

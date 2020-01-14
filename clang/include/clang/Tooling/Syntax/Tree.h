@@ -109,6 +109,9 @@ public:
   /// Runs in O(depth).
   unsigned computeDepth() const;
 
+  /// Produces a recursive copy of the current node. Expensive, use with care.
+  syntax::Node* deepCopy(syntax::Arena &A) const;
+
   /// Dumps the structure of a subtree. For debugging and testing purposes.
   std::string dump(const Arena &A) const;
   /// Dumps the tokens forming this subtree.
@@ -121,6 +124,8 @@ public:
   void assertInvariantsRecursive() const;
 
 private:
+  syntax::Node* clone(syntax::Arena &A) const;
+
   // Tree is allowed to change the Parent link and Role.
   friend class Tree;
   // TreeBuilder is allowed to set the Original and CanModify flags.
@@ -182,6 +187,7 @@ private:
   void prependChildLowLevel(Node *Child);
   friend class TreeBuilder;
   friend class FactoryImpl;
+  friend class Node;
 
   /// Replace a range of children [BeforeBegin->NextSibling, End) with a list of
   /// new nodes starting at \p New.

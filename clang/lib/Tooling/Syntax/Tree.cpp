@@ -11,6 +11,7 @@
 #include "clang/Tooling/Syntax/Nodes.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include <cassert>
 
@@ -191,6 +192,23 @@ unsigned syntax::Node::computeDepth() const {
   for (const Node *N = this; N->parent(); N = N->parent())
     ++D;
   return D;
+}
+
+syntax::Node *syntax::Node::deepCopy(syntax::Arena &A) const {
+  auto *New = clone(A);
+  if (isa<Leaf>(New))
+    return New;
+  llvm::SmallVector<syntax::Node *, 8> NewChildren;
+  for (auto *C = cast<Tree>(this)->firstChild(); C; C = C->nextSibling()) {
+    auto *NewC = C->deepCopy(A);
+    NewC->Role = C->Role;
+    NewC->CanModify = C->CanModify;
+    NewChildren.push_back(NewC);
+  }
+  auto *NewT = cast<Tree>(New);
+  for (auto *C : llvm::reverse(NewChildren))
+    NewT->prependChildLowLevel(C);
+  return New;
 }
 
 std::string syntax::Node::dump(const Arena &A) const {
