@@ -17,6 +17,7 @@
 #ifndef LLVM_CLANG_AST_TYPE_H
 #define LLVM_CLANG_AST_TYPE_H
 
+#include "clang/AST/DependencyFlags.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/Basic/AddressSpaces.h"
@@ -44,8 +45,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
-#include "llvm/Support/type_traits.h"
 #include "llvm/Support/TrailingObjects.h"
+#include "llvm/Support/type_traits.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -1464,19 +1465,11 @@ private:
     /// TypeClass bitfield - Enum that specifies what subclass this belongs to.
     unsigned TC : 8;
 
-    /// Whether this type is a dependent type (C++ [temp.dep.type]).
-    unsigned Dependent : 1;
-
-    /// Whether this type somehow involves a template parameter, even
-    /// if the resolution of the type does not depend on a template parameter.
-    unsigned InstantiationDependent : 1;
+    /// Store information on the type dependency.
+    /*TypeDependence*/ unsigned Dependence : TypeDependenceBits;
 
     /// Whether this type is a variably-modified type (C99 6.7.5).
     unsigned VariablyModified : 1;
-
-    /// Whether this type contains an unexpanded parameter pack
-    /// (for C++11 variadic templates).
-    unsigned ContainsUnexpandedParameterPack : 1;
 
     /// True if the cache (i.e. the bitfields here starting with
     /// 'Cache') is valid.
@@ -1823,11 +1816,17 @@ protected:
        bool ContainsUnexpandedParameterPack)
       : ExtQualsTypeCommonBase(this,
                                canon.isNull() ? QualType(this_(), 0) : canon) {
+    auto Deps = TypeDependence::None;
+    if (Dependent)
+      Deps |= TypeDependence::Dependent | TypeDependence::Instantiation;
+    if (InstantiationDependent)
+      Deps |= TypeDependence::Instantiation;
+    if (ContainsUnexpandedParameterPack)
+      Deps |= TypeDependence::UnexpandedPack;
+
     TypeBits.TC = tc;
-    TypeBits.Dependent = Dependent;
-    TypeBits.InstantiationDependent = Dependent || InstantiationDependent;
+    TypeBits.Dependence = static_cast<unsigned>(Deps);
     TypeBits.VariablyModified = VariablyModified;
-    TypeBits.ContainsUnexpandedParameterPack = ContainsUnexpandedParameterPack;
     TypeBits.CacheValid = false;
     TypeBits.CachedLocalOrUnnamed = false;
     TypeBits.CachedLinkage = NoLinkage;
@@ -1838,18 +1837,32 @@ protected:
   Type *this_() { return this; }
 
   void setDependent(bool D = true) {
-    TypeBits.Dependent = D;
-    if (D)
-      TypeBits.InstantiationDependent = true;
+    if (!D) {
+      TypeBits.Dependence &= ~static_cast<unsigned>(TypeDependence::Dependent);
+      return;
+    }
+    TypeBits.Dependence |= static_cast<unsigned>(TypeDependence::Dependent |
+                                                 TypeDependence::Instantiation);
   }
 
   void setInstantiationDependent(bool D = true) {
-    TypeBits.InstantiationDependent = D; }
+    if (D)
+      TypeBits.Dependence |=
+          static_cast<unsigned>(TypeDependence::Instantiation);
+    else
+      TypeBits.Dependence &=
+          ~static_cast<unsigned>(TypeDependence::Instantiation);
+  }
 
   void setVariablyModified(bool VM = true) { TypeBits.VariablyModified = VM; }
 
   void setContainsUnexpandedParameterPack(bool PP = true) {
-    TypeBits.ContainsUnexpandedParameterPack = PP;
+    if (PP)
+      TypeBits.Dependence |=
+          static_cast<unsigned>(TypeDependence::UnexpandedPack);
+    else
+      TypeBits.Dependence &=
+          ~static_cast<unsigned>(TypeDependence::UnexpandedPack);
   }
 
 public:
@@ -1884,7 +1897,7 @@ public:
   ///
   /// Note that this routine does not specify which
   bool containsUnexpandedParameterPack() const {
-    return TypeBits.ContainsUnexpandedParameterPack;
+    return getDependence() & TypeDependence::UnexpandedPack;
   }
 
   /// Determines if this type would be canonical if it had no further
@@ -2135,16 +2148,22 @@ public:
   /// Given that this is a scalar type, classify it.
   ScalarTypeKind getScalarTypeKind() const;
 
+  TypeDependence getDependence() const {
+    return static_cast<TypeDependence>(TypeBits.Dependence);
+  }
+
   /// Whether this type is a dependent type, meaning that its definition
   /// somehow depends on a template parameter (C++ [temp.dep.type]).
-  bool isDependentType() const { return TypeBits.Dependent; }
+  bool isDependentType() const {
+    return getDependence() & TypeDependence::Dependent;
+  }
 
   /// Determine whether this type is an instantiation-dependent type,
   /// meaning that the type involves a template parameter (even if the
   /// definition does not actually depend on the type substituted for that
   /// template parameter).
   bool isInstantiationDependentType() const {
-    return TypeBits.InstantiationDependent;
+    return getDependence() & TypeDependence::Instantiation;
   }
 
   /// Determine whether this type is an undeduced type, meaning that

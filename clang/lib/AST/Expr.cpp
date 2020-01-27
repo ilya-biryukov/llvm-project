@@ -17,6 +17,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/DependencyFlags.h"
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Mangle.h"
@@ -368,13 +369,11 @@ APValue ConstantExpr::getAPValueResult() const {
 /// Compute the type-, value-, and instantiation-dependence of a
 /// declaration reference
 /// based on the declaration being referenced.
-static void computeDeclRefDependence(const ASTContext &Ctx, NamedDecl *D,
-                                     QualType T, bool &TypeDependent,
-                                     bool &ValueDependent,
-                                     bool &InstantiationDependent) {
-  TypeDependent = false;
-  ValueDependent = false;
-  InstantiationDependent = false;
+static ExprDependence computeDeclRefDependence(const ASTContext &Ctx,
+                                               NamedDecl *D, QualType T) {
+  auto R = ExprDependence::None;
+  if (D->isParameterPack())
+    R |= ExprDependence::UnexpandedPack;
 
   // (TD) C++ [temp.dep.expr]p3:
   //   An id-expression is type-dependent if it contains:
@@ -386,36 +385,25 @@ static void computeDeclRefDependence(const ASTContext &Ctx, NamedDecl *D,
 
   //  (TD)  - an identifier that was declared with dependent type
   //  (VD)  - a name declared with a dependent type,
-  if (T->isDependentType()) {
-    TypeDependent = true;
-    ValueDependent = true;
-    InstantiationDependent = true;
-    return;
-  } else if (T->isInstantiationDependentType()) {
-    InstantiationDependent = true;
-  }
+  if (T->isDependentType())
+    return R | ExprDependence::TypeValueInstantiation;
+  else if (T->isInstantiationDependentType())
+    R |= ExprDependence::Instantiation;
 
   //  (TD)  - a conversion-function-id that specifies a dependent type
   if (D->getDeclName().getNameKind()
                                 == DeclarationName::CXXConversionFunctionName) {
     QualType T = D->getDeclName().getCXXNameType();
-    if (T->isDependentType()) {
-      TypeDependent = true;
-      ValueDependent = true;
-      InstantiationDependent = true;
-      return;
-    }
+    if (T->isDependentType())
+      return R | ExprDependence::TypeValueInstantiation;
 
     if (T->isInstantiationDependentType())
-      InstantiationDependent = true;
+      R |= ExprDependence::Instantiation;
   }
 
   //  (VD)  - the name of a non-type template parameter,
-  if (isa<NonTypeTemplateParmDecl>(D)) {
-    ValueDependent = true;
-    InstantiationDependent = true;
-    return;
-  }
+  if (isa<NonTypeTemplateParmDecl>(D))
+    return R | ExprDependence::ValueInstantiation;
 
   //  (VD) - a constant with integral or enumeration type and is
   //         initialized with an expression that is value-dependent.
@@ -432,8 +420,7 @@ static void computeDeclRefDependence(const ASTContext &Ctx, NamedDecl *D,
          Var->getType()->isReferenceType())) {
       if (const Expr *Init = Var->getAnyInitializer())
         if (Init->isValueDependent()) {
-          ValueDependent = true;
-          InstantiationDependent = true;
+          R |= ExprDependence::ValueInstantiation;
         }
     }
 
@@ -442,39 +429,21 @@ static void computeDeclRefDependence(const ASTContext &Ctx, NamedDecl *D,
     //         instantiation
     if (Var->isStaticDataMember() &&
         Var->getDeclContext()->isDependentContext()) {
-      ValueDependent = true;
-      InstantiationDependent = true;
+      R |= ExprDependence::ValueInstantiation;
       TypeSourceInfo *TInfo = Var->getFirstDecl()->getTypeSourceInfo();
       if (TInfo->getType()->isIncompleteArrayType())
-        TypeDependent = true;
+        R |= ExprDependence::Type;
     }
 
-    return;
+    return R;
   }
 
   // (VD) - FIXME: Missing from the standard:
   //      -  a member function or a static data member of the current
   //         instantiation
-  if (isa<CXXMethodDecl>(D) && D->getDeclContext()->isDependentContext()) {
-    ValueDependent = true;
-    InstantiationDependent = true;
-  }
-}
-
-void DeclRefExpr::computeDependence(const ASTContext &Ctx) {
-  bool TypeDependent = false;
-  bool ValueDependent = false;
-  bool InstantiationDependent = false;
-  computeDeclRefDependence(Ctx, getDecl(), getType(), TypeDependent,
-                           ValueDependent, InstantiationDependent);
-
-  ExprBits.TypeDependent |= TypeDependent;
-  ExprBits.ValueDependent |= ValueDependent;
-  ExprBits.InstantiationDependent |= InstantiationDependent;
-
-  // Is the declaration a parameter pack?
-  if (getDecl()->isParameterPack())
-    ExprBits.ContainsUnexpandedParameterPack = true;
+  if (isa<CXXMethodDecl>(D) && D->getDeclContext()->isDependentContext())
+    R |= ExprDependence::ValueInstantiation;
+  return R;
 }
 
 DeclRefExpr::DeclRefExpr(const ASTContext &Ctx, ValueDecl *D,
@@ -492,7 +461,7 @@ DeclRefExpr::DeclRefExpr(const ASTContext &Ctx, ValueDecl *D,
       RefersToEnclosingVariableOrCapture;
   DeclRefExprBits.NonOdrUseReason = NOUR;
   DeclRefExprBits.Loc = L;
-  computeDependence(Ctx);
+  addDependencies(computeDeclRefDependence(Ctx, getDecl(), getType()));
 }
 
 DeclRefExpr::DeclRefExpr(const ASTContext &Ctx,
@@ -511,9 +480,9 @@ DeclRefExpr::DeclRefExpr(const ASTContext &Ctx,
         NestedNameSpecifierLoc(QualifierLoc);
     auto *NNS = QualifierLoc.getNestedNameSpecifier();
     if (NNS->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
+      addDependencies(ExprDependence::Instantiation);
     if (NNS->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
+      addDependencies(ExprDependence::UnexpandedPack);
   }
   DeclRefExprBits.HasFoundDecl = FoundD ? 1 : 0;
   if (FoundD)
@@ -524,22 +493,19 @@ DeclRefExpr::DeclRefExpr(const ASTContext &Ctx,
       RefersToEnclosingVariableOrCapture;
   DeclRefExprBits.NonOdrUseReason = NOUR;
   if (TemplateArgs) {
-    bool Dependent = false;
-    bool InstantiationDependent = false;
-    bool ContainsUnexpandedParameterPack = false;
+    auto Deps = TemplateArgumentDependence::None;
     getTrailingObjects<ASTTemplateKWAndArgsInfo>()->initializeFrom(
         TemplateKWLoc, *TemplateArgs, getTrailingObjects<TemplateArgumentLoc>(),
-        Dependent, InstantiationDependent, ContainsUnexpandedParameterPack);
-    assert(!Dependent && "built a DeclRefExpr with dependent template args");
-    ExprBits.InstantiationDependent |= InstantiationDependent;
-    ExprBits.ContainsUnexpandedParameterPack |= ContainsUnexpandedParameterPack;
+        Deps);
+    assert(!(Deps & TemplateArgumentDependence::Dependent) &&
+           "built a DeclRefExpr with dependent template args");
+    addDependencies(toExprDependence(Deps));
   } else if (TemplateKWLoc.isValid()) {
     getTrailingObjects<ASTTemplateKWAndArgsInfo>()->initializeFrom(
         TemplateKWLoc);
   }
   DeclRefExprBits.HadMultipleCandidates = 0;
-
-  computeDependence(Ctx);
+  addDependencies(computeDeclRefDependence(Ctx, getDecl(), getType()));
 }
 
 DeclRefExpr *DeclRefExpr::Create(const ASTContext &Context,
@@ -1357,11 +1323,11 @@ CallExpr::CallExpr(StmtClass SC, Expr *Fn, ArrayRef<Expr *> PreArgs,
 
   setCallee(Fn);
   for (unsigned I = 0; I != NumPreArgs; ++I) {
-    updateDependenciesFromArg(PreArgs[I]);
+    addDependencies(PreArgs[I]->getDependence());
     setPreArg(I, PreArgs[I]);
   }
   for (unsigned I = 0; I != Args.size(); ++I) {
-    updateDependenciesFromArg(Args[I]);
+    addDependencies(Args[I]->getDependence());
     setArg(I, Args[I]);
   }
   for (unsigned I = Args.size(); I != NumArgs; ++I) {
@@ -1427,17 +1393,6 @@ unsigned CallExpr::offsetToTrailingObjects(StmtClass SC) {
   default:
     llvm_unreachable("unexpected class deriving from CallExpr!");
   }
-}
-
-void CallExpr::updateDependenciesFromArg(Expr *Arg) {
-  if (Arg->isTypeDependent())
-    ExprBits.TypeDependent = true;
-  if (Arg->isValueDependent())
-    ExprBits.ValueDependent = true;
-  if (Arg->isInstantiationDependent())
-    ExprBits.InstantiationDependent = true;
-  if (Arg->containsUnexpandedParameterPack())
-    ExprBits.ContainsUnexpandedParameterPack = true;
 }
 
 Decl *Expr::getReferencedDeclOfCallee() {
@@ -1585,9 +1540,9 @@ OffsetOfExpr::OffsetOfExpr(const ASTContext &C, QualType type,
 
   for (unsigned i = 0; i != exprs.size(); ++i) {
     if (exprs[i]->isTypeDependent() || exprs[i]->isValueDependent())
-      ExprBits.ValueDependent = true;
+      addDependencies(ExprDependence::Value);
     if (exprs[i]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
+      addDependencies(ExprDependence ::UnexpandedPack);
 
     setIndexExpr(i, exprs[i]);
   }
@@ -1629,8 +1584,7 @@ UnaryExprOrTypeTraitExpr::UnaryExprOrTypeTraitExpr(
       if (D) {
         for (const auto *I : D->specific_attrs<AlignedAttr>()) {
           if (I->isAlignmentDependent()) {
-            setValueDependent(true);
-            setInstantiationDependent(true);
+            addDependencies(ExprDependence::ValueInstantiation);
             break;
           }
         }
@@ -1683,20 +1637,19 @@ MemberExpr *MemberExpr::Create(
     // dyn_cast_or_null is used to handle objC variables which do not
     // have a declaration context.
     CXXRecordDecl *RD = dyn_cast_or_null<CXXRecordDecl>(DC);
-    if (RD && RD->isDependentContext() && RD->isCurrentInstantiation(DC))
-      E->setTypeDependent(T->isDependentType());
+    if (RD && RD->isDependentContext() && RD->isCurrentInstantiation(DC)) {
+      if (E->isTypeDependent() && !T->isDependentType())
+        E->removeDependencies(ExprDependence::Type);
+    }
   }
 
   if (HasQualOrFound) {
     // FIXME: Wrong. We should be looking at the member declaration we found.
-    if (QualifierLoc && QualifierLoc.getNestedNameSpecifier()->isDependent()) {
-      E->setValueDependent(true);
-      E->setTypeDependent(true);
-      E->setInstantiationDependent(true);
-    }
+    if (QualifierLoc && QualifierLoc.getNestedNameSpecifier()->isDependent())
+      E->addDependencies(ExprDependence::TypeValueInstantiation);
     else if (QualifierLoc &&
              QualifierLoc.getNestedNameSpecifier()->isInstantiationDependent())
-      E->setInstantiationDependent(true);
+      E->addDependencies(ExprDependence::Instantiation);
 
     E->MemberExprBits.HasQualifierOrFoundDecl = true;
 
@@ -1710,15 +1663,12 @@ MemberExpr *MemberExpr::Create(
       TemplateArgs || TemplateKWLoc.isValid();
 
   if (TemplateArgs) {
-    bool Dependent = false;
-    bool InstantiationDependent = false;
-    bool ContainsUnexpandedParameterPack = false;
+    auto Deps = TemplateArgumentDependence::None;
     E->getTrailingObjects<ASTTemplateKWAndArgsInfo>()->initializeFrom(
         TemplateKWLoc, *TemplateArgs,
-        E->getTrailingObjects<TemplateArgumentLoc>(), Dependent,
-        InstantiationDependent, ContainsUnexpandedParameterPack);
-    if (InstantiationDependent)
-      E->setInstantiationDependent(true);
+        E->getTrailingObjects<TemplateArgumentLoc>(), Deps);
+    if (Deps & TemplateArgumentDependence::Instantiation)
+      E->addDependencies(ExprDependence::Instantiation);
   } else if (TemplateKWLoc.isValid()) {
     E->getTrailingObjects<ASTTemplateKWAndArgsInfo>()->initializeFrom(
         TemplateKWLoc);
@@ -2236,16 +2186,8 @@ InitListExpr::InitListExpr(const ASTContext &C, SourceLocation lbraceloc,
     LBraceLoc(lbraceloc), RBraceLoc(rbraceloc), AltForm(nullptr, true)
 {
   sawArrayRangeDesignator(false);
-  for (unsigned I = 0; I != initExprs.size(); ++I) {
-    if (initExprs[I]->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (initExprs[I]->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (initExprs[I]->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (initExprs[I]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
-  }
+  for (unsigned I = 0; I != initExprs.size(); ++I)
+    addDependencies(initExprs[I]->getDependence());
 
   InitExprs.insert(C, InitExprs.end(), initExprs.begin(), initExprs.end());
 }
@@ -4159,15 +4101,7 @@ ShuffleVectorExpr::ShuffleVectorExpr(const ASTContext &C, ArrayRef<Expr*> args,
 {
   SubExprs = new (C) Stmt*[args.size()];
   for (unsigned i = 0; i != args.size(); i++) {
-    if (args[i]->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (args[i]->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (args[i]->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (args[i]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
-
+    addDependencies(args[i]->getDependence());
     SubExprs[i] = args[i];
   }
 }
@@ -4311,13 +4245,12 @@ DesignatedInitExpr::DesignatedInitExpr(const ASTContext &C, QualType Ty,
     if (this->Designators[I].isArrayDesignator()) {
       // Compute type- and value-dependence.
       Expr *Index = IndexExprs[IndexIdx];
-      if (Index->isTypeDependent() || Index->isValueDependent())
-        ExprBits.TypeDependent = ExprBits.ValueDependent = true;
-      if (Index->isInstantiationDependent())
-        ExprBits.InstantiationDependent = true;
-      // Propagate unexpanded parameter packs.
-      if (Index->containsUnexpandedParameterPack())
-        ExprBits.ContainsUnexpandedParameterPack = true;
+
+      // Propagate dependence flags.
+      auto Deps = Index->getDependence();
+      if (Deps & (ExprDependence::Type | ExprDependence::Value))
+        Deps |= ExprDependence::Type | ExprDependence::Value;
+      addDependencies(Deps);
 
       // Copy the index expressions into permanent storage.
       *Child++ = IndexExprs[IndexIdx++];
@@ -4325,19 +4258,11 @@ DesignatedInitExpr::DesignatedInitExpr(const ASTContext &C, QualType Ty,
       // Compute type- and value-dependence.
       Expr *Start = IndexExprs[IndexIdx];
       Expr *End = IndexExprs[IndexIdx + 1];
-      if (Start->isTypeDependent() || Start->isValueDependent() ||
-          End->isTypeDependent() || End->isValueDependent()) {
-        ExprBits.TypeDependent = ExprBits.ValueDependent = true;
-        ExprBits.InstantiationDependent = true;
-      } else if (Start->isInstantiationDependent() ||
-                 End->isInstantiationDependent()) {
-        ExprBits.InstantiationDependent = true;
-      }
 
-      // Propagate unexpanded parameter packs.
-      if (Start->containsUnexpandedParameterPack() ||
-          End->containsUnexpandedParameterPack())
-        ExprBits.ContainsUnexpandedParameterPack = true;
+      auto Deps = Start->getDependence() | End->getDependence();
+      if (Deps & (ExprDependence::Type | ExprDependence::Value))
+        Deps |= ExprDependence::TypeValueInstantiation;
+      addDependencies(Deps);
 
       // Copy the start/end expressions into permanent storage.
       *Child++ = IndexExprs[IndexIdx++];
@@ -4475,15 +4400,7 @@ ParenListExpr::ParenListExpr(SourceLocation LParenLoc, ArrayRef<Expr *> Exprs,
   ParenListExprBits.NumExprs = Exprs.size();
 
   for (unsigned I = 0, N = Exprs.size(); I != N; ++I) {
-    if (Exprs[I]->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (Exprs[I]->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (Exprs[I]->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (Exprs[I]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
-
+    addDependencies(Exprs[I]->getDependence());
     getTrailingObjects<Stmt *>()[I] = Exprs[I];
   }
 }
@@ -4570,14 +4487,7 @@ PseudoObjectExpr::PseudoObjectExpr(QualType type, ExprValueKind VK,
     Expr *E = (i == 0 ? syntax : semantics[i-1]);
     getSubExprsBuffer()[i] = E;
 
-    if (E->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (E->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (E->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (E->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
+    addDependencies(E->getDependence());
 
     if (isa<OpaqueValueExpr>(E))
       assert(cast<OpaqueValueExpr>(E)->getSourceExpr() != nullptr &&
@@ -4618,15 +4528,7 @@ AtomicExpr::AtomicExpr(SourceLocation BLoc, ArrayRef<Expr*> args,
 {
   assert(args.size() == getNumSubExprs(op) && "wrong number of subexpressions");
   for (unsigned i = 0; i != args.size(); i++) {
-    if (args[i]->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (args[i]->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (args[i]->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (args[i]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
-
+    addDependencies(args[i]->getDependence());
     SubExprs[i] = args[i];
   }
 }

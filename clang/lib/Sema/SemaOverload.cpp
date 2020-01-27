@@ -10,10 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/Sema/Overload.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DependencyFlags.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
@@ -24,6 +24,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
+#include "clang/Sema/Overload.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/Template.h"
 #include "clang/Sema/TemplateDeduction.h"
@@ -12694,9 +12695,7 @@ bool Sema::buildOverloadedCallSet(Scope *S, Expr *Fn,
       // base classes.
       CallExpr *CE = CallExpr::Create(Context, Fn, Args, Context.DependentTy,
                                       VK_RValue, RParenLoc);
-      CE->setTypeDependent(true);
-      CE->setValueDependent(true);
-      CE->setInstantiationDependent(true);
+      CE->addDependencies(ExprDependence::TypeValueInstantiation);
       *Result = CE;
       return true;
     }
