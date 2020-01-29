@@ -14184,9 +14184,8 @@ ExprResult Sema::ActOnChooseExpr(SourceLocation BuiltinLoc,
     OK = ActiveExpr->getObjectKind();
   }
 
-  return new (Context)
-      ChooseExpr(BuiltinLoc, CondExpr, LHSExpr, RHSExpr, resType, VK, OK, RPLoc,
-                 CondIsTrue, resType->isDependentType(), ValueDependent);
+  return new (Context) ChooseExpr(BuiltinLoc, CondExpr, LHSExpr, RHSExpr,
+                                  resType, VK, OK, RPLoc, CondIsTrue);
 }
 
 //===----------------------------------------------------------------------===//
