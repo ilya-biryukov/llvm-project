@@ -538,7 +538,8 @@ ExprDependence clang::computeDependence(CXXUnresolvedConstructExpr *E) {
   if (!(D & ExprDependence::Type) && E->getType()->getContainedDeducedType())
     D |= ExprDependence::Type;
   for (auto *A : E->arguments())
-    D |= A->getDependence() & ExprDependence::UnexpandedPack;
+    D |= A->getDependence() &
+         (ExprDependence::UnexpandedPack | ExprDependence::Error);
   return D;
 }
 

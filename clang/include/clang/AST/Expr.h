@@ -224,6 +224,12 @@ public:
     return static_cast<bool>(getDependence() & ExprDependence::UnexpandedPack);
   }
 
+  /// Whether this expression contains subexpressions which had errors, e.g. a
+  /// TypoExpr.
+  bool containsErrors() const {
+    return static_cast<bool>(getDependence() & ExprDependence::Error);
+  }
+
   /// getExprLoc - Return the preferred location for the arrow when diagnosing
   /// a problem with a generic expression.
   SourceLocation getExprLoc() const LLVM_READONLY;
@@ -5871,7 +5877,8 @@ class TypoExpr : public Expr {
 public:
   TypoExpr(QualType T) : Expr(TypoExprClass, T, VK_LValue, OK_Ordinary) {
     assert(T->isDependentType() && "TypoExpr given a non-dependent type");
-    setDependencies(ExprDependence::TypeValueInstantiation);
+    setDependencies(ExprDependence::TypeValueInstantiation |
+                    ExprDependence::Error);
   }
 
   child_range children() {
