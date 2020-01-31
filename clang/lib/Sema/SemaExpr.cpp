@@ -18141,3 +18141,16 @@ bool Sema::IsDependentFunctionNameExpr(Expr *E) {
   assert(E->isTypeDependent());
   return isa<UnresolvedLookupExpr>(E);
 }
+
+ExprResult Sema::CreateRecoveryExpr(SourceLocation Begin, SourceLocation End,
+                                    ArrayRef<Expr *> SubExprs) {
+  // Only enable RecoveryExpr in C++, RecoveryExpr is type-dependent to suppress
+  // bogus diagnostics and this trick does not work in C.
+  // FIXME: use containsErrors() to suppress unwanted diags in C.
+  if (!Context.getLangOpts().CPlusPlus)
+    return ExprError();
+  if (isSFINAEContext())
+    return ExprError();
+
+  return RecoveryExpr::Create(Context, Begin, End, SubExprs);
+}

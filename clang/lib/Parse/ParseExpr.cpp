@@ -625,13 +625,25 @@ Parser::ParseRHSOfBinaryExpression(ExprResult LHS, prec::Level MinPrec) {
                          SourceRange(Actions.getExprRange(LHS.get()).getBegin(),
                                      Actions.getExprRange(RHS.get()).getEnd()));
 
-        LHS = Actions.ActOnBinOp(getCurScope(), OpToken.getLocation(),
-                                 OpToken.getKind(), LHS.get(), RHS.get());
+        ExprResult BinOp =
+            Actions.ActOnBinOp(getCurScope(), OpToken.getLocation(),
+                               OpToken.getKind(), LHS.get(), RHS.get());
+        if (BinOp.isInvalid())
+          BinOp = Actions.CreateRecoveryExpr(LHS.get()->getBeginLoc(),
+                                             RHS.get()->getEndLoc(),
+                                             {LHS.get(), RHS.get()});
 
+        LHS = BinOp;
       } else {
-        LHS = Actions.ActOnConditionalOp(OpToken.getLocation(), ColonLoc,
-                                         LHS.get(), TernaryMiddle.get(),
-                                         RHS.get());
+        ExprResult CondOp = Actions.ActOnConditionalOp(
+            OpToken.getLocation(), ColonLoc, LHS.get(), TernaryMiddle.get(),
+            RHS.get());
+        if (CondOp.isInvalid())
+          CondOp = Actions.CreateRecoveryExpr(
+              LHS.get()->getBeginLoc(), RHS.get()->getEndLoc(),
+              {LHS.get(), TernaryMiddle.get(), RHS.get()});
+
+        LHS = CondOp;
       }
       // In this case, ActOnBinOp or ActOnConditionalOp performed the
       // CorrectDelayedTyposInExpr check.
@@ -1304,9 +1316,14 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
       UnconsumeToken(SavedTok);
       return ExprError();
     }
-    if (!Res.isInvalid())
+    if (!Res.isInvalid()) {
+      Expr *Arg = Res.get();
       Res = Actions.ActOnUnaryOp(getCurScope(), SavedTok.getLocation(),
-                                 SavedKind, Res.get());
+                                 SavedKind, Arg);
+      if (Res.isInvalid())
+        Res = Actions.CreateRecoveryExpr(SavedTok.getLocation(),
+                                         Arg->getEndLoc(), Arg);
+    }
     return Res;
   }
   case tok::amp: {         // unary-expression: '&' cast-expression
@@ -1316,8 +1333,13 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     SourceLocation SavedLoc = ConsumeToken();
     PreferredType.enterUnary(Actions, Tok.getLocation(), tok::amp, SavedLoc);
     Res = ParseCastExpression(AnyCastExpr, true);
-    if (!Res.isInvalid())
-      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Res.get());
+    if (!Res.isInvalid()) {
+      Expr *Arg = Res.get();
+      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Arg);
+      if (Res.isInvalid())
+        Res = Actions.CreateRecoveryExpr(Tok.getLocation(), Arg->getEndLoc(),
+                                         Arg);
+    }
     return Res;
   }
 
@@ -1333,8 +1355,12 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     SourceLocation SavedLoc = ConsumeToken();
     PreferredType.enterUnary(Actions, Tok.getLocation(), SavedKind, SavedLoc);
     Res = ParseCastExpression(AnyCastExpr);
-    if (!Res.isInvalid())
-      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Res.get());
+    if (!Res.isInvalid()) {
+      Expr *Arg = Res.get();
+      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Arg);
+      if (Res.isInvalid())
+        Res = Actions.CreateRecoveryExpr(SavedLoc, Arg->getEndLoc(), Arg);
+    }
     return Res;
   }
 
@@ -1936,11 +1962,17 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         LHS = ExprError();
       } else {
         assert((ArgExprs.size() == 0 ||
-                ArgExprs.size()-1 == CommaLocs.size())&&
-               "Unexpected number of commas!");
-        LHS = Actions.ActOnCallExpr(getCurScope(), LHS.get(), Loc,
-                                    ArgExprs, Tok.getLocation(),
+                ArgExprs.size() - 1 == CommaLocs.size()) &&
+                "Unexpected number of commas!");
+        Expr *Fn = LHS.get();
+        SourceLocation RParLoc = Tok.getLocation();
+        LHS = Actions.ActOnCallExpr(getCurScope(), Fn, Loc, ArgExprs, RParLoc,
                                     ExecConfig);
+        if (LHS.isInvalid()) {
+          ArgExprs.insert(ArgExprs.begin(), Fn);
+          LHS =
+              Actions.CreateRecoveryExpr(Fn->getBeginLoc(), RParLoc, ArgExprs);
+        }
         PT.consumeClose();
       }
 
@@ -2064,8 +2096,12 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
     case tok::plusplus:    // postfix-expression: postfix-expression '++'
     case tok::minusminus:  // postfix-expression: postfix-expression '--'
       if (!LHS.isInvalid()) {
+        Expr *Arg = LHS.get();
         LHS = Actions.ActOnPostfixUnaryOp(getCurScope(), Tok.getLocation(),
-                                          Tok.getKind(), LHS.get());
+                                          Tok.getKind(), Arg);
+        if (LHS.isInvalid())
+          LHS = Actions.CreateRecoveryExpr(Arg->getBeginLoc(),
+                                           Tok.getLocation(), Arg);
       }
       ConsumeToken();
       break;

@@ -346,6 +346,13 @@ ExprDependence clang::computeDependence(DeclRefExpr *E, const ASTContext &Ctx) {
   return Deps;
 }
 
+ExprDependence clang::computeDependence(RecoveryExpr *E) {
+  auto Deps = ExprDependence::TypeValueInstantiation | ExprDependence::Error;
+  for (auto *S : E->subExpressions())
+    Deps |= S->getDependence();
+  return Deps;
+}
+
 ExprDependence clang::computeDependence(CXXRewrittenBinaryOperator *E) {
   return E->getSemanticForm()->getDependence();
 }

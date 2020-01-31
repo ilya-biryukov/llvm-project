@@ -11,5 +11,5 @@ int bar(const __global unsigned int &i); // expected-note{{passing argument to p
 int bar(const unsigned int &i);
 
 void foo() {
-  bar(1) // expected-error{{binding reference of type 'const __global unsigned int' to value of type 'int' changes address space}}
+  bar(1); // expected-error{{binding reference of type 'const __global unsigned int' to value of type 'int' changes address space}}
 }
