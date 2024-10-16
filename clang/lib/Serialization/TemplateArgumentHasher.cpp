@@ -12,6 +12,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/TemplateName.h"
 #include "clang/AST/TypeVisitor.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "llvm/ADT/FoldingSet.h"
@@ -135,6 +136,7 @@ void TemplateArgumentHasher::AddTemplateName(TemplateName Name) {
   case TemplateName::DependentTemplate:
   case TemplateName::SubstTemplateTemplateParm:
   case TemplateName::SubstTemplateTemplateParmPack:
+  case TemplateName::DeducedTemplate:
     BailedOut = true;
     break;
   case TemplateName::UsingTemplate:
